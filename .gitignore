@@ -1,0 +1,16 @@
+.env
+*.env
+!.env.example
+__pycache__/
+*.pyc
+.venv/
+venv/
+logs/*
+!logs/.gitkeep
+output/*
+!output/.gitkeep
+.DS_Store
+.idea/
+.vscode/
+tests/local/data/
+.pytest_cache/

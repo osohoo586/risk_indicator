@@ -1,0 +1,50 @@
+# GitLab CODEOWNERS: folder бүрийн эзэн. Merge request-д тэдний approve шаардлагатай.
+# GitLab: Settings → Repository → Protected branches → main → "Code owner approval" асаана.
+# @dev_a, @dev_b, @dev_c-г GitLab-ийн бодит username-ээр солино.
+# Activity нэмэх бүрд энд нэг мөр нэмнэ: /activities/act_NN_slug/ @owner @reviewer
+
+[core]
+/ri_runner/      @dev_a @dev_b @dev_c
+/config/         @dev_a @dev_b @dev_c
+/ddl/            @dev_a @dev_b @dev_c
+/templates/      @dev_a @dev_b @dev_c
+/shared/         @dev_a @dev_b @dev_c        # олон үзүүлэлтэд нөлөөлнө
+/activities/_shared/  @dev_a @dev_b @dev_c   # нийтлэг тооцоолол (35 үйл ажиллагаа)
+
+[activities]
+/activities/act_01_corporate_business/                   @dev_a @dev_b
+/activities/act_02_sme_business/                         @dev_a @dev_b
+/activities/act_03_asset_liability_management/           @dev_a @dev_b
+/activities/act_04_trading_asset_management/             @dev_a @dev_b
+/activities/act_06_leasing/                              @dev_a @dev_b
+/activities/act_07_interbank_payments/                   @dev_a @dev_b
+/activities/act_08_foreign_payments/                     @dev_a @dev_b
+/activities/act_09_registration_monitoring/              @dev_a @dev_b
+/activities/act_10_foreign_funding/                      @dev_a @dev_b
+/activities/act_11_external_fund_financing/              @dev_a @dev_b
+/activities/act_13_sustainable_finance/                  @dev_a @dev_b
+/activities/act_15_private_banking/                      @dev_a @dev_b
+/activities/act_16_customer_file_custody/                @dev_a @dev_b
+/activities/act_17_branch_management/                    @dev_a @dev_b
+/activities/act_18_retail_business/                      @dev_a @dev_b
+/activities/act_19_insurance/                            @dev_a @dev_b
+/activities/act_20_atm_cdm/                              @dev_a @dev_b
+/activities/act_21_digital_transformation/               @dev_a @dev_b
+/activities/act_22_investor_relations/                   @dev_a @dev_b
+/activities/act_23_physical_security/                    @dev_a @dev_b
+/activities/act_24_letters_of_credit/                    @dev_a @dev_b
+/activities/act_25_product_development/                  @dev_a @dev_b
+/activities/act_26_digital_banking/                      @dev_a @dev_b
+/activities/act_27_card_issuing/                         @dev_a @dev_b
+/activities/act_28_card_acquiring/                       @dev_a @dev_b
+/activities/act_29_cash_valuables/                       @dev_a @dev_b
+/activities/act_30_custodian/                            @dev_a @dev_b
+/activities/act_32_marketing/                            @dev_a @dev_b
+/activities/act_33_procurement/                          @dev_a @dev_b
+/activities/act_34_project_management/                   @dev_a @dev_b
+/activities/act_35_loan_origination/                     @dev_a @dev_b
+/activities/act_36_loan_monitoring/                      @dev_a @dev_b
+/activities/act_37_loan_collection/                      @dev_a @dev_b
+/activities/act_39_customer_service/                     @dev_a @dev_b
+/activities/act_40_human_resources/                      @dev_a @dev_b
+/activities/act_97_practice/                             @dev_a @dev_b

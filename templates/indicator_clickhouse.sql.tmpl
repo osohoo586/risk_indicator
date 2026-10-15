@@ -1,0 +1,30 @@
+/*---
+indicator_id: {{indicator_id}}
+name_mn: {{name_mn}}
+name_en: {{name_en}}
+description: >
+  TODO: Бизнес тодорхойлолт, томьёо.
+connection: {{connection}}          # ClickHouse source: clickhouse_dwh / clickhouse_ra
+frequency: {{frequency}}            # daily / semimonthly / monthly / quarterly / yearly
+status: TODO                        # TODO → IN_PROGRESS → REVIEW → TESTED → DONE
+version: 0.1.0
+complexity: {{complexity}}          # simple / medium / complex
+# ── Оноо (master-аас) ──
+weight: 0                           # үйл ажиллагаа доторх жин (%)
+score_type: score1
+scale_text: |
+  1-96.1%-аас дээш
+  3-90.1%-96%
+  5-90% - с доош
+test_dates: []                      # [2026-06-30, 2026-09-30]
+# Үр дүн: riskassessment.ri_result (нэг хүснэгт). docs/sql_standard.md
+---*/
+SELECT 'SOL'                                      AS ENTITY_LEVEL,
+       toString(G_SOL_ID)                         AS ENTITY_ID,      -- TODO
+       sum(ACTUAL_AMT)                            AS NUMERATOR,
+       sum(PLAN_AMT)                              AS DENOMINATOR,
+       sum(ACTUAL_AMT) / nullIf(sum(PLAN_AMT), 0) AS VALUE,
+       count()                                    AS SOURCE_ROW_COUNT
+FROM {{schema.finacle}}.TODO_TABLE
+WHERE toDate(B_TXNDATE) = {p_report_date:Date}
+GROUP BY ENTITY_ID

@@ -1,0 +1,76 @@
+# TEST орчин. Review-д орсон үзүүлэлтүүдийг бодит дататай шалгана.
+environment: test
+
+result:
+  connection: clickhouse_ra
+  database: risk_assessment
+
+min_status: REVIEW               # REVIEW, TESTED, DONE төлөвтэйг л ажиллуулна
+enforce_frequency: false
+insert_on_validation_fail: true    # Шалгалт унасан ч бичнэ (харж засахад)
+allow_clean: true
+default_workers: 4
+default_timeout_seconds: 900
+
+# BRANCHID → SOLID: COREMIS.MAIN-аас тайлант өдрөөр (shared/org/units.sql). Бүтэц өөрчлөгдвөл автоматаар.
+# MAIN-д хандах эрхгүй бол энэ хэсгийг хасна → config/activity_units.csv (snapshot) ашиглана.
+org:
+  connection: oracle_whouse
+  shared: org.units
+
+# "Аудит орсноос хойш"-ийн эхлэлийг аудитын системээс (GRC хүснэгт бодитоор баталгаажсаны дараа идэвхжүүлнэ;
+# эс бөгөөс config/activity_map.csv LAST_AUDIT_DATE):
+# audit:
+#   connection: oracle_whouse
+#   shared: grc.last_audit
+
+# Орчин бүрт өөр параметр (файлын params-ийг дарна), жнь BI тайлангийн PKEY:
+# params:
+#   SH_029: {p_pkeys: "....."}         # нийтлэг тодорхойлолт (бүх үйл ажиллагаанд)
+#   RI_01_0005: {p_pkeys: "....."}     # ганц үзүүлэлт
+
+schemas:
+  ri: risk_assessment             # ClickHouse: үр дүн (ri_result, v_risk_indicators)
+  ra: RISKASSESSMENT             # Oracle: хуучин RISKASSESSMENT schema (SQL загварын TODO_TABLE)
+  finacle: FINACLE
+  coremis: COREMIS
+  main: COREMIS                  # MAIN (SOLID → BRANCHID) хүснэгтийн schema
+  erp: ERP
+  golomt_v1: GOLOMT_V1
+  cardzone: CARDZONE
+  cardzone_dwh: default           # ТААМАГ: ClickHouse DWH-ийн картын гүйлгээний database
+  jira: JIRA
+  grc: GRC                       # ТААМАГ: дотоод аудит, бодлого, мэдээллийн аюулгүй байдал (GRC систем)
+
+connections:
+  oracle_ra:
+    type: oracle
+    connect_string: ${TEST_ORACLE_RA}
+  oracle_whouse:
+    type: oracle
+    connect_string: ${TEST_ORACLE_WHOUSE}
+  oracle_erp:
+    type: oracle
+    connect_string: ${TEST_ORACLE_ERP}
+  oracle_cec:
+    type: oracle
+    connect_string: ${TEST_ORACLE_CEC}
+  oracle_ilo:
+    type: oracle
+    connect_string: ${TEST_ORACLE_ILO}
+  clickhouse_ra:                 # Үр дүн бичих ClickHouse (risk_assessment)
+    type: clickhouse
+    host: ${TEST_CH_HOST}
+    port: ${TEST_CH_PORT}
+    user: ${TEST_CH_USER}
+    password: ${TEST_CH_PASSWORD}
+    database: risk_assessment
+    secure: false
+  clickhouse_dwh:                # Source ClickHouse (FINACLE, CARDZONE ...)
+    type: clickhouse
+    host: ${TEST_CH_HOST}
+    port: ${TEST_CH_PORT}
+    user: ${TEST_CH_USER}
+    password: ${TEST_CH_PASSWORD}
+    database: default
+    secure: false

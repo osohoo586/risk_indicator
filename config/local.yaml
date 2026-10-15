@@ -1,0 +1,80 @@
+# LOCAL орчин — өөрийн компьютер дээр prod-той ижил бүтэц: Docker дахь ЖИНХЭНЭ Oracle + ClickHouse.
+#   Бүгдийг бэлдэх (нэг тушаал):  ./tests/local/setup.sh
+#   Oracle  (risk-oracle, FREEPDB1): стандарт банкны DEMO DB — COREMIS, FINACLE, ERP, CARDZONE, JIRA
+#                                    (tests/local/bank_demo.py, FINACLE.RA_LOAN_PKG хуучин procedure)
+#   ClickHouse (risk-clickhouse):    source cardzone_dwh, үр дүн risk_assessment_local (dev/prod-д хүрэхгүй)
+#   Бүх DB-г харах:  python tests/local/show_dbs.py
+environment: local
+
+result:
+  connection: clickhouse_ra
+  database: risk_assessment_local
+
+min_status: TODO
+enforce_frequency: false
+insert_on_validation_fail: true    # Шалгалт унасан ч бичнэ (харж засахад)
+allow_clean: true
+default_workers: 4
+default_timeout_seconds: 600
+
+# BRANCHID → SOLID: COREMIS.MAIN-аас тайлант өдрөөр (shared/org/units.sql). Бүтэц өөрчлөгдвөл автоматаар.
+org:
+  connection: oracle_whouse
+  shared: org.units
+# "Аудит орсноос хойш" хугацааны эхлэл: GRC-ийн аудитын бүртгэлээс тайлант өдрөөр (shared/grc/last_audit.sql)
+audit:
+  connection: oracle_whouse
+  shared: grc.last_audit
+# Бүлэг → BRANCHID: local demo-д ТОДРУУЛАХ 5 бүлэгт түр BRANCHID (tests/local/seed_bank.py үүсгэнэ)
+orgmap:
+  activity_map: tests/local/demo/activity_map.csv
+
+schemas:
+  ri: risk_assessment_local
+  ra: RISKASSESSMENT             # SQL загварын (TODO_TABLE) schema
+  coremis: COREMIS
+  main: COREMIS                  # MAIN (SOLID → BRANCHID) хүснэгтийн schema
+  finacle: FINACLE
+  erp: ERP
+  cardzone: CARDZONE
+  cardzone_dwh: cardzone_dwh     # ClickHouse source (картын гүйлгээний DWH хуулбар)
+  golomt_v1: GOLOMT_V1
+  jira: JIRA
+  grc: GRC                       # ТААМАГ: дотоод аудит, бодлого, мэдээллийн аюулгүй байдал (GRC систем)
+
+# ${VAR:-утга}: хувьсагч алга бол docker-ийн default (tests/local/setup.sh-ийн үүсгэсэн container).
+# Өөр Oracle/ClickHouse ашиглах бол LOCAL_ORACLE, LOCAL_CH_* хувьсагчийг тохируулна.
+connections:
+  oracle_whouse:
+    type: oracle
+    connect_string: ${LOCAL_ORACLE:-system/oracle_dev@localhost:1521/FREEPDB1}
+  oracle_ra:
+    type: oracle
+    connect_string: ${LOCAL_ORACLE:-system/oracle_dev@localhost:1521/FREEPDB1}
+  clickhouse_ra:                 # Үр дүн бичих ClickHouse
+    type: clickhouse
+    host: ${LOCAL_CH_HOST:-localhost}
+    port: ${LOCAL_CH_PORT:-8123}
+    user: ${LOCAL_CH_USER:-default}
+    password: ${LOCAL_CH_PASSWORD:-risk_dev}
+    database: risk_assessment_local
+    secure: false
+  clickhouse_dwh:                # Source ClickHouse (картын гүйлгээ, DWH)
+    type: clickhouse
+    host: ${LOCAL_CH_HOST:-localhost}
+    port: ${LOCAL_CH_PORT:-8123}
+    user: ${LOCAL_CH_USER:-default}
+    password: ${LOCAL_CH_PASSWORD:-risk_dev}
+    database: cardzone_dwh
+    secure: false
+
+# Орчин бүрт өөр параметр (файлын params-ийг дарна): BI тайлангийн PKEY — demo DB-ийнх (tests/local/bank_demo.py).
+# Түлхүүр нь SQL-тэй файл: нийтлэг тодорхойлолт (SH_029 = Зээлийн төлөвлөгөө — act_01, act_02) эсвэл RI_GG_NNNN
+params:
+  SH_029: {p_pkeys: "10001,10002"}      # GL3003a зээл (₮, валют)
+  SH_030: {p_pkeys: "20001,20002"}      # GL3003a харилцах, хадгаламж
+  SH_032: {p_pkeys: "30001"}            # GL3003a лизингийн багц
+  SH_031: {p_pkeys: "40001,40002"}      # IN2003 цэвэр хүү, шимтгэлийн орлого
+  RI_01_0005: {p_pkeys: "42200"}            # IN2003 алтны арилжааны ашиг
+  SH_033: {p_pkeys: "43001"}            # IN2003 лизингийн хүүгийн орлого
+  RI_01_0014: {p_pkeys: "44001"}            # IN2003 КҮБ-ийн шимтгэлийн орлого

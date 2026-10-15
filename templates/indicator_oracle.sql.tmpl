@@ -1,0 +1,40 @@
+/*---
+indicator_id: {{indicator_id}}
+name_mn: {{name_mn}}
+name_en: {{name_en}}
+description: >
+  TODO: Бизнес тодорхойлолт, томьёо.
+connection: {{connection}}          # Oracle source: oracle_whouse / oracle_ra / oracle_erp
+frequency: {{frequency}}            # daily / semimonthly / monthly / quarterly / yearly
+status: TODO                        # TODO → IN_PROGRESS → REVIEW → TESTED → DONE
+version: 0.1.0
+complexity: {{complexity}}          # simple / medium / complex
+# ── Оноо (master-аас) ──
+weight: 0                           # үйл ажиллагаа доторх жин (%), үйл ажиллагааны нийлбэр = 100
+score_type: score1
+scale_text: |                       # master-ийн Scale (0.95 гэх харьцааг % шатлалтай автоматаар тулгана)
+  1-96.1%-аас дээш
+  3-90.1%-96%
+  5-90% - с доош
+test_dates: []                      # [2026-06-30, 2026-09-30]
+# Найдвартай байдал (зөвлөмж):
+#   source_check: |                 # source-д тухайн өдрийн дата ачаалагдсан эсэх (0 бол SKIPPED)
+#     SELECT COUNT(*) FROM <source хүснэгт> WHERE <огноо> = :p_report_date
+#   min_rows: 50                    # үүнээс цөөн мөр гарвал FAIL (source дутуу)
+#   max_change_pct: {pct: 30}       # үйл ажиллагааны утга өмнөх үеэс 30%+ өөрчлөгдвөл WARNING
+# Заавал биш: dependencies: [RI_01_001] | empty_source: fail | value_range: {min: 0, max: 1}
+#             params: {p_xxx: утга} | sql_from: RI_01_010 | rollup_metrics: {value: sum}
+#             check_sql: | ... (ClickHouse, {target_table} = ri_result)
+# Үр дүн: riskassessment.ri_result (нэг хүснэгт). docs/sql_standard.md
+---*/
+-- Стандарт багана: ENTITY_LEVEL, ENTITY_ID, VALUE (+ ENTITY_NAME, METRIC, NUMERATOR, DENOMINATOR, SOURCE_ROW_COUNT)
+-- SOL түвшинд гаргавал runner үйл ажиллагааны SOL-уудаар Σ NUMERATOR / Σ DENOMINATOR нэгтгэнэ.
+SELECT 'SOL'                                      AS ENTITY_LEVEL,
+       TO_CHAR(t.SOLID)                           AS ENTITY_ID,      -- TODO
+       SUM(t.ACTUAL_AMT)                          AS NUMERATOR,      -- TODO: гүйцэтгэл / тоологч
+       SUM(t.PLAN_AMT)                            AS DENOMINATOR,    -- TODO: төлөвлөгөө / хуваарь
+       SUM(t.ACTUAL_AMT) / NULLIF(SUM(t.PLAN_AMT), 0) AS VALUE,
+       COUNT(*)                                   AS SOURCE_ROW_COUNT
+FROM   {{schema.ra}}.TODO_TABLE t
+WHERE  t.TXNDATE = :p_report_date
+GROUP  BY t.SOLID

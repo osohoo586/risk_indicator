@@ -1,0 +1,47 @@
+activity_id: ACT_13
+activity_name_mn: "Тогтвортой санхжүүжилтийн үйл ажиллагаа"
+activity_name_mn_old: "Шинэ үйл ажиллагаа"
+activity_name_en: "Sustainable finance"
+# branch_id: ""          # BRANCHID — өгөөгүй бол config/activity_map.csv-ээс (бүлгийн дугаараар)
+owner: unassigned_owner
+reviewer: unassigned_reviewer
+
+defaults:
+  connection: oracle_whouse
+  frequency: quarterly
+  timeout_seconds: 600
+
+# ── Нийтлэг үзүүлэлт (ri.py import үүсгэнэ — id, def, weight, зөрүү нь master-аас; params, enabled, note-ийг гараар нэмж болно) ──
+# Олон үйл ажиллагаанд давтагддаг үзүүлэлт: тодорхойлолт activities/_shared/sh_NNN.sql, энд №, жин, зөрүү.
+shared:
+  - id: RI_13_0471                              # Action plan биелэлт
+    def: SH_010
+    weight: 2.5
+    method: "ОУБГ-ТСХ-н Action plan-ын хэрэгжилтэд үндэслэн үнэлнэ."
+  - id: RI_13_0481                              # Нэг ажилтанд ногдох сургалтын цаг
+    def: SH_004
+    weight: 1
+    method: "ОУБГ-ТСХ"
+  - {id: RI_13_0482, def: SH_005, weight: 1.5}           # Орон тоо бүрэн эсэх
+  - {id: RI_13_0483, def: SH_001, weight: 1.5}           # Ажилтнуудын ажилласан жилийн дундаж
+  - {id: RI_13_0484, def: SH_006, weight: 1}             # Удирдах ажилтны ажилласан жилийн дундаж
+  - {id: RI_13_0485, def: SH_007, weight: 1.5}           # Хүний нөөцийн эргэц
+  - {id: RI_13_0486, def: SH_002, weight: 1.5}           # Ажилтнуудын ажлын гүйцэтгэлийн үнэлгээний дундаж
+  - {id: RI_13_0487, def: SH_003, weight: 2}             # Гарсан гомдлын тоо
+  - {id: RI_13_0488, def: SH_008, weight: 2}             # Ёс зүйн зөрчил
+  - {id: RI_13_0489, def: SH_011, weight: 1.5}           # Бүтцийн өөрчлөлт хийгдсэн эсэх
+  - {id: RI_13_0490, def: SH_012, weight: 1.5}           # Дүрэм журам шинэчлэгдсэн эсэх
+  - {id: RI_13_0491, def: SH_013, weight: 1}             # Үйл ажиллагааг сайжруулах шинэ програм хангамж, хэрэгсэл нэв
+  - {id: RI_13_0492, def: SH_014, weight: 1}             # Үйл ажиллагаатай холбоотой хууль эрх зүйг өөрчлөлт гарсан эс
+  - {id: RI_13_0493, def: SH_015, weight: 1.5}           # Монгол банкны үнэлгээ
+  - {id: RI_13_0494, def: SH_016, weight: 1.5}           # Хөндлөнгийн аудитын зөвлөмж
+  - {id: RI_13_0495, def: SH_017, weight: 4}             # Өмнөх аудитаас хойшхи хугацаа
+  - {id: RI_13_0496, def: SH_018, weight: 4}             # Өмнөх аудитын үнэлгээ
+  - {id: RI_13_0497, def: SH_019, weight: 4}             # Өндөр эрсдэлтэй асуудлын тоо
+  - {id: RI_13_0498, def: SH_020, weight: 4}             # Follow up үнэлгээ
+  - {id: RI_13_0499, def: SH_021, weight: 4}             # Зайны аудитаар зөрчил гарсан эсэх
+  - {id: RI_13_0500, def: SH_022, weight: 5}             # Мэдлэгийн түвшин
+  - {id: RI_13_0501, def: SH_023, weight: 5}             # Банкны нууцын зэрэглэлтэй мэдээлэл задруулсан эсэх
+  - {id: RI_13_0502, def: SH_024, weight: 5}             # Харилцагчийн нууцын зэрэглэлтэй мэдээлэл задруулсан эсэх
+  - {id: RI_13_0503, def: SH_026, weight: 10}            # Бодлого, стратегид тусгасан, ач холбогдолтой ажил хийгдсэн э
+  - {id: RI_13_0504, def: SH_025, weight: 10}            # Аудиторын үнэлэмж

@@ -1,0 +1,15 @@
+# Merge request бүр дээр: static шалгалт + unit тест (DB шаардлагагүй).
+# Runner shell executor бол `image:` мөрийг устгаж, серверт python3 суулгасан байхад хангалттай.
+stages:
+  - check
+
+check:
+  stage: check
+  image: python:3.10-slim
+  script:
+    - pip install --quiet PyYAML -r requirements-dev.txt
+    - python ri.py check
+    - pytest
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"

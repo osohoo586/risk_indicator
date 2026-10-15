@@ -1,0 +1,4 @@
+oracledb>=2.0
+clickhouse-connect>=0.7
+PyYAML>=6.0
+openpyxl>=3.1

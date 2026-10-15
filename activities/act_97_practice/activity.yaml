@@ -1,0 +1,17 @@
+activity_id: ACT_97
+activity_name_mn: Туршилт (шинэ үзүүлэлт нэмэх)
+activity_name_en: Practice (adding a new indicator)
+owner: dev_a            # Энэ activity-ийн SQL-ийг бичих хүн
+reviewer: dev_b         # Review хийх хүн (owner-оос өөр)
+# example: true → --all, progress, нийт оноо (UI)-д орохгүй. Local demo DB дээр шинэ үзүүлэлт бичиж дадлага хийнэ.
+# BRANCHID 1500 = салбарын сүлжээ (demo-д 12 салбар SOL 101…112, ямар ч үйл ажиллагаанд ороогүй).
+#   python ri.py run    --env local activities/act_97_practice/ -p 2026-Q3
+#   python ri.py verify --env local activities/act_97_practice/ -p 2026-Q3
+# Файл бүрийн доорх comment дахь query-г ClickHouse дээр (DBeaver эсвэл http://localhost:8123/play) ажиллуулж шалгана.
+example: true
+branch_id: "1500"
+
+defaults:
+  connection: oracle_whouse
+  frequency: quarterly
+  timeout_seconds: 600

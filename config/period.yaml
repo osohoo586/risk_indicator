@@ -1,0 +1,10 @@
+# ════════════════════════════════════════════════════════════════════
+#  ТАЙЛАНГИЙН ХУГАЦАА — зөвхөн үүнийг солиод ажиллуулна:
+#      python ri.py run --env prod --all
+#
+#  SQL-д:  :p_period_start = start_date,   :p_report_date = end_date
+#          (ClickHouse source: {p_period_start:Date}, {p_report_date:Date})
+#  ClickHouse-д мөрүүд report_date = end_date-аар хадгалагдана.
+# ════════════════════════════════════════════════════════════════════
+start_date: 2026-07-01
+end_date: 2026-09-30
