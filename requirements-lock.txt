@@ -1,0 +1,5 @@
+# Яг тестэлсэн хувилбарууд (2026-10-15, Python 3.12, шинэ venv дээр): pip install -r requirements-lock.txt
+oracledb==26.0.1
+clickhouse-connect==1.10.1
+PyYAML==6.0.3
+openpyxl==3.1.5
