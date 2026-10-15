@@ -40,22 +40,46 @@ def test_source_write_is_classified():
 
 
 def _row(**kw):
-    base = {"row_type": "INDICATOR", "report_date": D, "indicator_id": "RI_05_0001", "branch_id": "998",
-            "entity_level": "ACTIVITY", "entity_id": "998", "metric": "value", "activity_id": "ACT_05",
-            "sol_id": "808,810", "file_name": "activities/act_05_test/ri_05_0001.sql", "value": 0.95,
-            "numerator": 95.0, "denominator": 100.0, "score": 3.0, "weight": 1.5}
+    """Runner-ийн дотоод мөр (target_rows): үйл ажиллагааны утга + задаргаа."""
+    base = {"row_type": "INDICATOR", "report_date": D, "indicator_id": "RI_05_0001", "indicator_name": "Тест",
+            "branch_id": "998", "activity_id": "ACT_05", "activity_name": "Байгууллагын бизнес",
+            "entity_level": "ACTIVITY", "entity_id": "998", "metric": "value", "primary": True, "sol_id": "808,810",
+            "value": 0.95, "numerator": 95.0, "denominator": 100.0, "score": 3.0, "weight": 1.5, "run_id": "run1"}
     base.update(kw)
     return base
 
 
+def _res(**kw):
+    """ri_result-ийн мөр."""
+    base = store.to_result_rows([_row()])[0]
+    base.update(kw)
+    return base
+
+
+def test_to_result_rows_keeps_one_row_per_indicator_and_activity():
+    rows = [_row(), _row(entity_level="SOL", entity_id="808", sol_id="808"), _row(metric="cnt", primary=False)]
+    out = store.to_result_rows(rows)
+    assert out == [{"activity": "Байгууллагын бизнес", "activity_id": "ACT_05", "solid": "808,810", "branch_id": "998",
+                    "risk_indicator": "Тест", "risk_ind_id": "RI_05_0001", "result_number": 0.95, "result": "3",
+                    "snapshot_date": D, "run_id": "run1"}]
+    assert list(out[0]) == list(store.RESULT_COLUMNS)
+    total = store.to_result_rows([{"row_type": "ACTIVITY", "report_date": D, "activity_id": "ACT_05",
+                                   "activity_name": "Байгууллагын бизнес", "branch_id": "998", "sol_id": "808,810",
+                                   "value": 3.16, "level": "Дунд", "run_id": "run1"}])[0]
+    assert (total["risk_ind_id"], total["risk_indicator"], total["result_number"], total["result"]) == \
+        ("TOTAL", "Нийт оноо", 3.16, "Дунд")
+    assert [store.fmt_score(x) for x in (5.0, 3.5, None)] == ["5", "3.5", None]
+    assert [store.parse_score(x) for x in ("5", "3.5", "Дунд", None)] == [5.0, 3.5, None, None]
+
+
 def test_written_diff():
-    sent = [_row(), _row(entity_level="SOL", entity_id="808", sol_id="808", score=None, weight=None)]
+    sent = [_res(), _res(risk_ind_id="RI_05_0002")]
     assert store.written_diff(sent, [dict(r) for r in sent]) == []
-    assert "SOL 808 value: ClickHouse-д алга" in store.written_diff(sent, [dict(sent[0])])
-    assert "value 0.95 ≠ 0.94" in store.written_diff(sent, [_row(value=0.94), dict(sent[1])])[0]
-    assert "sol_id '808,810' ≠ '808'" in store.written_diff(sent, [_row(sol_id="808"), dict(sent[1])])[0]
-    assert "2 удаа бичигдсэн" in store.written_diff(sent[:1], [_row(), _row()])[0]
-    assert store.written_diff(sent[:1], [_row(), dict(sent[1])]) == ["SOL 808 value: илүү мөр (1)"]
+    assert "RI_05_0002 998 2026-09-30: ClickHouse-д алга" in store.written_diff(sent, [dict(sent[0])])
+    assert "result_number 0.95 ≠ 0.94" in store.written_diff(sent, [_res(result_number=0.94), dict(sent[1])])[0]
+    assert "solid '808,810' ≠ '808'" in store.written_diff(sent, [_res(solid="808"), dict(sent[1])])[0]
+    assert "2 удаа бичигдсэн" in store.written_diff(sent[:1], [_res(), _res()])[0]
+    assert store.written_diff(sent[:1], [_res(), dict(sent[1])]) == ["RI_05_0002 998 2026-09-30: илүү мөр (1)"]
 
 
 class FakeCH:
@@ -90,14 +114,14 @@ class Cfg:
 
 
 def test_insert_is_read_back_and_rolled_back_on_mismatch():
-    scope = {"indicator_id": "RI_05_0001", "report_date": D, "row_type": "INDICATOR"}
+    scope = {"risk_ind_id": "RI_05_0001", "snapshot_date": D}
     ok = FakeCH()
-    store.insert_result_verified(Cfg, ok, [_row()], scope, "run1")
-    assert ok.calls == ["INSERT", "SELECT"]
-    bad = FakeCH(tamper={"value": 0.5})
+    store.insert_result_verified(Cfg, ok, [_row(), _row(entity_level="SOL", entity_id="808")], scope, "run1")
+    assert ok.calls == ["INSERT", "SELECT"] and len(ok.rows) == 1          # задаргаа хадгалагдахгүй
+    bad = FakeCH(tamper={"result_number": 0.5})
     with pytest.raises(RunnerError) as exc:
         store.insert_result_verified(Cfg, bad, [_row()], scope, "run1")
-    assert exc.value.code == "INSERT_MISMATCH" and "value 0.95 ≠ 0.5" in str(exc.value)
+    assert exc.value.code == "INSERT_MISMATCH" and "result_number 0.95 ≠ 0.5" in str(exc.value)
     assert bad.calls == ["INSERT", "SELECT", "DELETE", "SELECT"]   # бичсэнээ устгаж (шалгаж) хуучин нь үлдэнэ
 
 
@@ -105,22 +129,23 @@ def test_delete_is_verified_and_retried(monkeypatch):
     """DELETE-ийн дараа мөр үлдвэл дахин; DELETE_RETRIES удаа үлдвэл DELETE_INCOMPLETE (чимээгүй давхардахгүй)."""
     monkeypatch.setattr(store.time, "sleep", lambda s: None)
     once = FakeCH(sticky_deletes=1)
-    once.rows = [_row()]
+    once.rows = [_res()]
     store.delete_verified(once, "db.t", "1 = 1", {}, "тест")
     assert once.calls == ["DELETE", "SELECT", "DELETE", "SELECT"] and once.rows == []
     stuck = FakeCH(sticky_deletes=99)
-    stuck.rows = [_row()]
+    stuck.rows = [_res()]
     with pytest.raises(RunnerError) as exc:
         store.delete_verified(stuck, "db.t", "1 = 1", {}, "тест")
     assert exc.value.code == "DELETE_INCOMPLETE" and stuck.calls.count("DELETE") == store.DELETE_RETRIES
 
 
 def test_verify_compare():
-    exp = [_row(), _row(entity_level="SOL", entity_id="808", sol_id="808")]
-    assert compare(exp, [dict(r) for r in exp]) == []
-    diff = compare(exp, [_row(score=4.0), dict(exp[1])])
-    assert "score: тооцоо=3.0 ClickHouse=4.0" in diff[0]
-    assert compare(exp, [dict(exp[0])]) == ["SOL 808 value: ClickHouse-д алга"]
+    exp = [_row(), _row(entity_level="SOL", entity_id="808", sol_id="808")]     # дотоод мөрүүд (дахин тооцоолсон)
+    assert compare(exp, [_res()]) == []
+    diff = compare(exp, [_res(result="4")])
+    assert "result: тооцоо='3' ClickHouse='4'" in diff[0]
+    assert compare(exp, []) == ["RI_05_0001 998: ClickHouse-д алга"]
+    assert compare([], [_res()]) == ["RI_05_0001 998: ClickHouse-д илүү мөр"]
 
 
 def test_due_dates(make_ind):

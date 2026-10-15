@@ -25,7 +25,7 @@ test_dates: []                      # [2026-06-30, 2026-09-30]
 # Заавал биш: dependencies: [RI_01_001] | empty_source: fail | value_range: {min: 0, max: 1}
 #             params: {p_xxx: утга} | sql_from: RI_01_010 | rollup_metrics: {value: sum}
 #             check_sql: | ... (ClickHouse, {target_table} = ri_result)
-# Үр дүн: riskassessment.ri_result (нэг хүснэгт). docs/sql_standard.md
+# Үр дүн: risk_assessment.ri_result (нэг хүснэгт, үзүүлэлт × үйл ажиллагаа × өдөрт нэг мөр). docs/sql_standard.md
 ---*/
 -- Стандарт багана: ENTITY_LEVEL, ENTITY_ID, VALUE (+ ENTITY_NAME, METRIC, NUMERATOR, DENOMINATOR, SOURCE_ROW_COUNT)
 -- SOL түвшинд гаргавал runner үйл ажиллагааны SOL-уудаар Σ NUMERATOR / Σ DENOMINATOR нэгтгэнэ.

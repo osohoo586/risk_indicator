@@ -2,8 +2,8 @@
 
     python ri.py report --env dev -a 998 -d 2026-09-30        → output/report_998_20260930.html
 
-Бүтэц:  нийт оноо → master-ийн Score бүлгээр (score1…score6) үзүүлэлтүүд → үзүүлэлт дээр дарахад SOL задаргаа.
-ri_result-д мөргүй үзүүлэлт (TODO, бөглөөгүй manual) ч жагсаалтад харагдана.
+Бүтэц:  нийт оноо (TOTAL) → master-ийн Score бүлгээр (score1…score6) үзүүлэлтүүд → үзүүлэлт дээр дарахад шатлал,
+SOLID-ууд. ri_result-д мөргүй үзүүлэлт (TODO, бөглөөгүй manual) ч жагсаалтад харагдана.
 """
 import datetime as dt
 import html
@@ -46,23 +46,17 @@ def _level_cls(level: str) -> str:
 
 
 def _query(cfg: EnvConfig, conn, branch_id: str, d: dt.date):
-    db, t = f"`{cfg.result_db}`", store.RESULT_TABLE
+    """(TOTAL мөр, {risk_ind_id: мөр}, өмнөх үеүүдийн нийт оноо). Мөр: (result_number, result, solid, loaded_at)."""
+    db, t, total = f"`{cfg.result_db}`", store.RESULT_TABLE, store.TOTAL_ID
     p = {"b": str(branch_id), "d": d}
-    cols, act = conn.query(
-        f"SELECT value, level, n_scored, n_indicators, weight_coverage, loaded_at FROM {db}.{t} "
-        f"WHERE branch_id = {{b:String}} AND report_date = {{d:Date}} AND row_type = 'ACTIVITY'", p)
-    _, ind = conn.query(
-        f"SELECT indicator_id, source_kind, value, value_text, score, score_label, weight, numerator, denominator, "
-        f"comment, entered_by, loaded_at FROM {db}.{t} WHERE branch_id = {{b:String}} AND report_date = {{d:Date}} "
-        f"AND row_type = 'INDICATOR' AND entity_level = 'ACTIVITY'", p)
-    _, sol = conn.query(
-        f"SELECT indicator_id, entity_level, entity_id, entity_name, numerator, denominator, value FROM {db}.{t} "
-        f"WHERE branch_id = {{b:String}} AND report_date = {{d:Date}} AND row_type = 'INDICATOR' "
-        f"AND entity_level != 'ACTIVITY' ORDER BY indicator_id, value", p)
+    _, rows = conn.query(
+        f"SELECT risk_ind_id, result_number, result, solid, loaded_at FROM {db}.{t} "
+        f"WHERE branch_id = {{b:String}} AND snapshot_date = {{d:Date}}", p)
     _, hist = conn.query(
-        f"SELECT report_date, value, level FROM {db}.{t} WHERE branch_id = {{b:String}} AND row_type = 'ACTIVITY' "
-        f"AND report_date <= {{d:Date}} ORDER BY report_date DESC LIMIT 6", p)
-    return (act[0] if act else None), ind, sol, hist
+        f"SELECT snapshot_date, result_number, result FROM {db}.{t} WHERE branch_id = {{b:String}} "
+        f"AND risk_ind_id = '{total}' AND snapshot_date <= {{d:Date}} ORDER BY snapshot_date DESC LIMIT 6", p)
+    res = {r[0]: r[1:] for r in rows}
+    return res.pop(total, None), res, hist
 
 
 def build(cfg: EnvConfig, cat: Catalog, activity_key: str, d: dt.date, path: Path | None = None) -> Path:
@@ -70,11 +64,8 @@ def build(cfg: EnvConfig, cat: Catalog, activity_key: str, d: dt.date, path: Pat
     if not act.branch_id:
         raise ValueError(f"{act.activity_id}-д BRANCHID алга")
     with connect(cfg, cfg.result_connection) as conn:
-        act_row, ind_rows, sol_rows, hist = _query(cfg, conn, act.branch_id, d)
-    res = {r[0]: r for r in ind_rows}
-    sols = defaultdict(list)
-    for r in sol_rows:
-        sols[r[0]].append(r)
+        act_row, res, hist = _query(cfg, conn, act.branch_id, d)
+    scores = {iid: store.parse_score(r[1]) for iid, r in res.items()}
 
     groups = load_scoring(cfg)["groups"]
     inds = [i for i in cat.by_activity(act.activity_id) if i.enabled and not i.example]
@@ -84,15 +75,15 @@ def build(cfg: EnvConfig, cat: Catalog, activity_key: str, d: dt.date, path: Pat
 
     def g_stats(items):
         tw = sum(i.weight or 0 for i in items)
-        sc = [(float(res[i.indicator_id][4]), i.weight or 0) for i in items
-              if i.indicator_id in res and res[i.indicator_id][4] is not None and i.weight]
+        sc = [(scores[i.indicator_id], i.weight) for i in items
+              if scores.get(i.indicator_id) is not None and scores[i.indicator_id] > 0 and i.weight]
         sw = sum(w for _, w in sc)
-        return tw, (sum(s * w for s, w in sc) / sw if sw else None), len(sc)
+        return tw, (sum(s * w for s, w in sc) / sw if sw else None), len(sc), sw
 
     score = act_row[0] if act_row else None
     level = act_row[1] if act_row else ""
-    cov = act_row[4] if act_row else None
-    n_scored = act_row[2] if act_row else 0
+    total_w, _, n_scored, scored_w = g_stats(inds)
+    cov = scored_w / total_w if total_w else None
 
     out = []
     w = out.append
@@ -141,13 +132,13 @@ summary::-webkit-details-marker{{display:none}} details[open] summary{{backgroun
 
     for gkey in sorted(by_group, key=lambda k: (k not in groups, k)):
         items = by_group[gkey]
-        tw, gavg, gn = g_stats(items)
+        tw, gavg, gn, _ = g_stats(items)
         w(f'<section><header><h2>{_e(gkey.capitalize())} · {_e(groups.get(gkey, ""))}</h2>'
           f'<span class="mut">жин {tw:g}% · оноотой {gn}/{len(items)} · дундаж '
           f'{"—" if gavg is None else f"{gavg:.2f}"}</span></header>')
         for i in items:
             r = res.get(i.indicator_id)
-            sc = None if not r else r[4]
+            sc = scores.get(i.indicator_id)
             if r:
                 state = MODE_LABEL.get(i.mode, i.mode)
             elif i.mode == "manual":
@@ -159,26 +150,17 @@ summary::-webkit-details-marker{{display:none}} details[open] summary{{backgroun
             w('<details class="row"><summary>'
               f'<span class="id">{_e(i.indicator_no)}</span>'
               f'<span>{_e(i.name_mn)} <span class="id">{_e(i.indicator_id)}</span></span>'
-              f'<span class="num hide-m">{_fmt_value(i, r[2] if r else None, r[3] if r else None)}</span>'
+              f'<span class="num hide-m">{_fmt_value(i, r[0] if r else None, None)}</span>'
               f'<span class="hide-m"><span class="tag">{_e(state)}</span></span>'
               f'<span><span class="sc {_score_cls(sc)}">{"—" if sc is None else f"{float(sc):g}"}</span></span>'
-              f'<span class="mut hide-m">жин {i.weight or 0:g}% · {_e((r[5] if r else "") or "")}</span>'
+              f'<span class="mut hide-m">жин {i.weight or 0:g}%</span>'
               '</summary><div class="det">')
             if i.scale_text:
                 w(f'<div class="scale">Шатлал:\n{_e(i.scale_text.strip())}</div>')
-            if r and (r[7] is not None or r[8] is not None):
-                w(f'<div>Хүртвэр: <b>{_fmt_num(r[7])}</b> · Хуваарь: <b>{_fmt_num(r[8])}</b></div>')
-            if r and (r[9] or r[10]):
-                w(f'<div class="mut">{_e(r[9] or "")} {("— " + _e(r[10])) if r[10] else ""}</div>')
-            detail = sols.get(i.indicator_id, [])
-            if detail:
-                w('<table><tr><th>SOL</th><th>Нэр</th><th class="num">Хүртвэр</th><th class="num">Хуваарь</th>'
-                  '<th class="num">Утга</th></tr>')
-                for _, lvl, eid, ename, num, den, val in detail:
-                    w(f'<tr><td class="id">{_e(eid)}</td><td>{_e(ename)}</td><td class="num">{_fmt_num(num)}</td>'
-                      f'<td class="num">{_fmt_num(den)}</td><td class="num">{_fmt_value(i, val, None)}</td></tr>')
-                w('</table>')
-            elif not r:
+            if r:
+                w(f'<div class="mut">result_number {_fmt_num(r[0])} · result {_e(r[1] or "—")} · '
+                  f'SOLID: {_e(r[2] or "—")}</div>')
+            else:
                 src = i.master.get("source_system") or ""
                 w(f'<div class="mut">Мэдээлэл алга. {("Эх сурвалж: " + _e(src)) if src else ""}</div>')
             w('</div></details>')

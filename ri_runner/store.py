@@ -1,16 +1,22 @@
-"""ClickHouse: НЭГ үр дүнгийн хүснэгт (riskassessment.ri_result) + audit + history.
+"""ClickHouse: НЭГ үр дүнгийн хүснэгт (risk_assessment.ri_result) + audit + history.
+
+ri_result-ийн мөр = үзүүлэлт × үйл ажиллагаа (BRANCHID) × тайлант өдөр:
+  activity, activity_id, solid (SOLID-ууд, metadata), branch_id, risk_indicator, risk_ind_id,
+  result_number (тооцсон утга), result (оноо; TOTAL мөрөнд түвшин), snapshot_date (+ техникийн run_id, loaded_at).
+Runner дотроо SOL задаргаа, тоологч / хуваарьтай мөрүүдээр тооцно (verify, --save-csv); `to_result_rows` нь тэднийг
+ri_result-ийн мөр болгоно.
 
 Бичих нэгж (scope):
-  INDICATOR мөрүүд — (indicator_id, report_date, row_type='INDICATOR')
-  ACTIVITY мөрүүд  — (branch_id, report_date, row_type='ACTIVITY')   (1 BRANCHID = 1 үйл ажиллагаа)
+  үзүүлэлт  — (risk_ind_id, snapshot_date)
+  нийт оноо — (branch_id, risk_ind_id='TOTAL', snapshot_date)   (1 BRANCHID = 1 үйл ажиллагаа)
 
 Бичих: шинэ мөрийг run_id-тай бичээд ClickHouse-оос БУЦААЖ уншиж мөр бүрийг тулгана (insert_result_verified) —
-зөрвөл энэ run-ий мөрийг устгаад алдаа (FAILED, хуучин утга хэвээр). Мөр бүрт ACTIVITY (activity_id, branch_id),
-SOLID (sol_id), файл (file_name) metadata.
+зөрвөл энэ run-ий мөрийг устгаад алдаа (FAILED, хуучин утга хэвээр).
 Дахин ажиллуулах: шинэ мөрийг run_id-тай бичээд, шалгалт давбал тухайн scope-ийн хуучин мөрүүдийг
 ri_history-д (JSON) хуулж устгана. Зэрэг ажилласан run-уудаас хамгийн сүүлд бичсэн нь үлдэнэ.
 Шалгалт унавал (prod) шинэ мөрийг устгаж хуучин нь үлдэнэ.
 """
+import datetime as dt
 import logging
 import math
 import re
@@ -28,16 +34,15 @@ DELETE_RETRIES = 3
 RESULT_TABLE = "ri_result"
 ACTIVITY_TABLE = "ri_activity"
 INDICATOR_TABLE = "ri_indicator"
-VIEWS = ("v_activity_score", "v_indicator_score", "v_indicator_detail", "v_risk_indicators")
+VIEWS = ("v_activity_score", "v_indicator_score")
+OLD_VIEWS = ("v_indicator_detail", "v_risk_indicators")        # хуучин бүтцийнх — init-db устгана
 AUDIT_TABLE = "ri_execution_audit"
 HISTORY_TABLE = "ri_history"
 
-RESULT_COLUMNS = ("report_date", "period_start", "row_type", "group_no", "activity_id", "branch_id", "sol_id",
-                  "activity_name", "indicator_id", "indicator_name", "calc_id", "source_kind", "file_name",
-                  "entity_level", "entity_id", "entity_name", "parent_id", "metric", "numerator",
-                  "denominator", "value", "value_text", "score", "score_label", "weight", "level",
-                  "n_indicators", "n_scored", "weight_coverage", "data_status", "score_type",
-                  "scale_version", "source_row_count", "comment", "entered_by", "run_id", "sql_version")
+TOTAL_ID = "TOTAL"                                # үйл ажиллагааны нийт оноо (risk_ind_id)
+TOTAL_NAME = "Нийт оноо"
+RESULT_COLUMNS = ("activity", "activity_id", "solid", "branch_id", "risk_indicator", "risk_ind_id",
+                  "result_number", "result", "snapshot_date", "run_id")
 AUDIT_COLUMNS = ("run_id", "run_mode", "activity_id", "indicator_id", "report_date", "period_start",
                  "execution_status", "started_at", "finished_at", "duration_seconds",
                  "affected_rows", "source_row_count", "result_row_count", "validation_detail",
@@ -48,8 +53,6 @@ AUDIT_COLUMNS = ("run_id", "run_mode", "activity_id", "indicator_id", "report_da
 STD_REQUIRED = ("ENTITY_LEVEL", "ENTITY_ID", "VALUE")
 STD_OPTIONAL = ("ENTITY_NAME", "METRIC", "NUMERATOR", "DENOMINATOR", "VALUE_TEXT", "SOURCE_ROW_COUNT",
                 "DATA_STATUS")
-# Өмнө нь үүссэн ri_result-д шинээр нэмэгдсэн баганууд (ALTER ... IF NOT EXISTS)
-RESULT_NEW_COLUMNS = (("sol_id", "String DEFAULT '' AFTER branch_id"), ("file_name", "String DEFAULT '' AFTER source_kind"))
 
 
 def q(name: str) -> str:
@@ -79,17 +82,17 @@ def ensure_base(cfg: EnvConfig, conn: Connector, log=print) -> bool:
     if not rows[0][0]:
         conn.execute(f"CREATE DATABASE IF NOT EXISTS {q(cfg.result_db)}")
     created = False
+    if conn.table_exists(cfg.result_db, RESULT_TABLE) and \
+            "risk_ind_id" not in set(conn.table_columns(cfg.result_db, RESULT_TABLE)):
+        legacy = f"{RESULT_TABLE}_legacy_{dt.datetime.now():%Y%m%d%H%M%S}"   # хуучин бүтэц: устгахгүй, нэрийг нь солино
+        conn.execute(f"RENAME TABLE {q(cfg.result_db)}.{RESULT_TABLE} TO {q(cfg.result_db)}.{q(legacy)}")
+        log(f"Хуучин бүтэцтэй {cfg.result_db}.{RESULT_TABLE}-ийг {legacy} нэрээр хадгаллаа (устгаагүй)")
     for table, file in ((RESULT_TABLE, "ri_result.sql"), (HISTORY_TABLE, "ri_history.sql"),
                         (AUDIT_TABLE, "ri_execution_audit.sql"), (ACTIVITY_TABLE, "ri_activity.sql"),
                         (INDICATOR_TABLE, "ri_indicator.sql")):
         if not conn.table_exists(cfg.result_db, table):
             _run_ddl(cfg, conn, file)
             log(f"Хүснэгт үүсгэлээ: {cfg.result_db}.{table}")
-            created = True
-    have = set(conn.table_columns(cfg.result_db, RESULT_TABLE))
-    for col, typ in RESULT_NEW_COLUMNS:
-        if col not in have:
-            conn.execute(f"ALTER TABLE {q(cfg.result_db)}.{RESULT_TABLE} ADD COLUMN IF NOT EXISTS {col} {typ}")
             created = True
     existing = set(conn.table_columns(cfg.result_db, AUDIT_TABLE))
     if "period_start" not in existing:
@@ -105,6 +108,8 @@ def ensure_views(cfg: EnvConfig, conn: Connector) -> None:
     """UI-д зориулсан view-уудыг (CREATE OR REPLACE) үүсгэнэ — ddl/clickhouse/views.sql."""
     text = (DDL_DIR / "clickhouse" / "views.sql").read_text(encoding="utf-8")
     text = "\n".join(l for l in text.splitlines() if not l.strip().startswith("--"))
+    for v in OLD_VIEWS:
+        conn.execute(f"DROP VIEW IF EXISTS {q(cfg.result_db)}.{v}")
     for stmt in (s.strip() for s in text.split(";")):
         if stmt:
             conn.execute(stmt.replace("{db}", cfg.result_db))
@@ -170,25 +175,46 @@ def write_audits(cfg: EnvConfig, conn: Connector, recs: list[dict]) -> None:
 
 
 # ── ri_result бичих ───────────────────────────────────────────────────────────
-# Nullable биш баганууд: утга өгөөгүй бол
-NOT_NULL_DEFAULTS = {"row_type": "", "group_no": 0, "activity_id": "", "branch_id": "", "sol_id": "",
-                     "file_name": "", "activity_name": "",
-                     "indicator_id": "", "indicator_name": "", "calc_id": "", "source_kind": "",
-                     "entity_level": "", "entity_id": "", "metric": "value", "level": "", "data_status": "OK",
-                     "score_type": "", "scale_version": "", "run_id": "", "sql_version": ""}
+def fmt_score(score) -> str | None:
+    """Оноо → ri_result.result: 5.0 → "5", 3.5 → "3.5", None → None (үнэлэхгүй)."""
+    if score is None:
+        return None
+    f = float(score)
+    return str(int(f)) if f.is_integer() else f"{f:g}"
 
 
-def insert_result(cfg: EnvConfig, conn: Connector, rows: list[dict]) -> None:
-    if rows:
-        data = [[NOT_NULL_DEFAULTS[c] if r.get(c) is None and c in NOT_NULL_DEFAULTS else r.get(c)
-                 for c in RESULT_COLUMNS] for r in rows]
-        conn.insert(cfg.result_db, RESULT_TABLE, list(RESULT_COLUMNS), data)
+def to_result_rows(rows: list[dict]) -> list[dict]:
+    """Runner-ийн дотоод мөрүүд → ri_result-ийн мөр (үзүүлэлт × үйл ажиллагаа × өдөрт НЭГ).
+
+    Дотоод мөр: row_type INDICATOR (entity_level ACTIVITY = үйл ажиллагааны утга, SOL г.м. = задаргаа) эсвэл
+    ACTIVITY (нийт оноо). Хадгалах нь: үйл ажиллагааны утга (оноо тооцсон METRIC — primary) ба нийт оноо;
+    задаргаа, бусад METRIC хадгалагдахгүй."""
+    out = []
+    for r in rows:
+        if r.get("row_type") == "ACTIVITY":
+            iid, name, result = TOTAL_ID, TOTAL_NAME, (r.get("level") or None)
+        elif r.get("entity_level") == "ACTIVITY" and r.get("primary", True):
+            iid, name, result = r.get("indicator_id") or "", r.get("indicator_name") or "", fmt_score(r.get("score"))
+        else:
+            continue
+        out.append({"activity": r.get("activity_name") or "", "activity_id": r.get("activity_id") or "",
+                    "solid": r.get("sol_id") or "", "branch_id": str(r.get("branch_id") or ""),
+                    "risk_indicator": name, "risk_ind_id": iid, "result_number": r.get("value"),
+                    "result": result, "snapshot_date": r.get("report_date"), "run_id": r.get("run_id") or ""})
+    return out
+
+
+def insert_result(cfg: EnvConfig, conn: Connector, rows: list[dict]) -> list[dict]:
+    """Дотоод мөрүүдийг ri_result-д бичнэ; бичсэн (хөрвүүлсэн) мөрүүдийг буцаана."""
+    out = to_result_rows(rows)
+    if out:
+        conn.insert(cfg.result_db, RESULT_TABLE, list(RESULT_COLUMNS), [[r[c] for c in RESULT_COLUMNS] for r in out])
+    return out
 
 
 # Буцааж уншиж тулгах түлхүүр, утгын баганууд
-_KEY = ("row_type", "report_date", "indicator_id", "branch_id", "entity_level", "entity_id", "metric")
-_CHECK = ("activity_id", "sol_id", "file_name", "numerator", "denominator", "value", "value_text", "score", "weight",
-          "level", "data_status", "report_date")
+_KEY = ("risk_ind_id", "branch_id", "snapshot_date")
+_CHECK = ("activity", "activity_id", "solid", "risk_indicator", "result_number", "result")
 
 
 def _same(a, b) -> bool:
@@ -209,7 +235,7 @@ def written_diff(sent: list[dict], got: list[dict]) -> list[str]:
     problems = []
     for r in sent:
         rows = have.pop(key(r), [])
-        k = f"{r.get('entity_level')} {r.get('entity_id')} {r.get('metric')}"
+        k = f"{r.get('risk_ind_id')} {r.get('branch_id')} {r.get('snapshot_date')}"
         if not rows:
             problems.append(f"{k}: ClickHouse-д алга")
             continue
@@ -218,21 +244,20 @@ def written_diff(sent: list[dict], got: list[dict]) -> list[str]:
         diff = [f"{c} {r.get(c)!r} ≠ {rows[0].get(c)!r}" for c in _CHECK if c in r and not _same(r.get(c), rows[0].get(c))]
         if diff:
             problems.append(f"{k}: " + ", ".join(diff[:3]))
-    problems += [f"{k[4]} {k[5]} {k[6]}: илүү мөр ({len(v)})" for k, v in have.items()]
+    problems += [f"{k[0]} {k[1]} {k[2]}: илүү мөр ({len(v)})" for k, v in have.items()]
     return problems
 
 
 def insert_result_verified(cfg: EnvConfig, conn: Connector, rows: list[dict], scope: dict, run_id: str) -> None:
     """Бичээд ClickHouse-оос буцааж уншиж мөр бүрийг тулгана. Зөрвөл энэ run-ий мөрийг устгаад RunnerError
     (INSERT_MISMATCH) — бүгд зөв бичигдсэн, эсвэл юу ч үлдэхгүй (хуучин утга хэвээр)."""
-    insert_result(cfg, conn, rows)
+    sent = insert_result(cfg, conn, rows)
     sw, params = _scope_where(scope)
     params["r"] = run_id
     cols = list(dict.fromkeys(_KEY + _CHECK))
     _, got = conn.query(f"SELECT {', '.join(cols)} FROM {q(cfg.result_db)}.{RESULT_TABLE} "
                         f"WHERE {sw} AND run_id = {{r:String}}", params)
-    sent = [{c: (r.get(c) if r.get(c) is not None else NOT_NULL_DEFAULTS.get(c)) for c in cols} for r in rows]
-    problems = written_diff(sent, [dict(zip(cols, g)) for g in got])
+    problems = written_diff([{c: r.get(c) for c in cols} for r in sent], [dict(zip(cols, g)) for g in got])
     if problems:
         try:
             discard_run(cfg, conn, scope, run_id)
@@ -265,9 +290,15 @@ def _scope_where(scope: dict) -> tuple[str, dict]:
     for k, v in scope.items():
         if not re.fullmatch(r"[a-z_]+", k):
             raise ValueError(k)
-        parts.append(f"{k} = {{s_{k}:{'Date' if k == 'report_date' else 'String'}}}")
+        parts.append(f"{k} = {{s_{k}:{'Date' if k == 'snapshot_date' else 'String'}}}")
         params[f"s_{k}"] = v
-    return " AND ".join(parts), params
+    return " AND ".join(parts) or "1 = 1", params
+
+
+# ri_history.indicator_id: үзүүлэлт, эсвэл нийт оноо бол TOTAL_<BRANCHID>
+_HIST_SELECT = (f"SELECT if(risk_ind_id = '{TOTAL_ID}', concat('{TOTAL_ID}_', branch_id), risk_ind_id), "
+                f"'{RESULT_TABLE}', snapshot_date, run_id, {{r:String}}, formatRowNoNewline('JSONEachRow', *)")
+_HIST_INSERT = "(indicator_id, table_name, report_date, run_id, replaced_by_run, row_json)"
 
 
 def keep_only_run(cfg: EnvConfig, conn: Connector, scope: dict, run_id: str) -> int:
@@ -286,10 +317,8 @@ def keep_only_run(cfg: EnvConfig, conn: Connector, scope: dict, run_id: str) -> 
     _, rows = conn.query(f"SELECT count() FROM {db}.{t} WHERE {where}", params)
     n = int(rows[0][0])
     if n:
-        conn.execute(f"INSERT INTO {db}.{HISTORY_TABLE} "
-                     f"(indicator_id, table_name, report_date, run_id, replaced_by_run, row_json) "
-                     f"SELECT if(row_type = 'ACTIVITY', concat('BR_', branch_id), indicator_id), '{t}', report_date, run_id, "
-                     f"{{r:String}}, formatRowNoNewline('JSONEachRow', *) FROM {db}.{t} WHERE {where}", params)
+        conn.execute(f"INSERT INTO {db}.{HISTORY_TABLE} {_HIST_INSERT} {_HIST_SELECT} FROM {db}.{t} WHERE {where}",
+                     params)
         delete_verified(conn, f"{db}.{t}", where, params, f"хуучин мөр ({scope})")
     return n
 
@@ -303,23 +332,21 @@ def clear_scope(cfg: EnvConfig, conn: Connector, scope: dict, run_id: str) -> in
     _, rows = conn.query(f"SELECT count() FROM {db}.{t} WHERE {sw}", params)
     n = int(rows[0][0])
     if n:
-        conn.execute(f"INSERT INTO {db}.{HISTORY_TABLE} "
-                     f"(indicator_id, table_name, report_date, run_id, replaced_by_run, row_json) "
-                     f"SELECT indicator_id, '{t}', report_date, run_id, {{r:String}}, "
-                     f"formatRowNoNewline('JSONEachRow', *) FROM {db}.{t} WHERE {sw}", params)
+        conn.execute(f"INSERT INTO {db}.{HISTORY_TABLE} {_HIST_INSERT} {_HIST_SELECT} FROM {db}.{t} WHERE {sw}", params)
         delete_verified(conn, f"{db}.{t}", sw, params, f"мөргүй болсон үзүүлэлтийн хуучин мөр ({scope})")
     return n
 
 
 def keep_only_run_many(cfg: EnvConfig, conn: Connector, pairs: list[tuple], run_id: str) -> int:
-    """keep_only_run-ийн олон (indicator_id, report_date)-ийн хувилбар (гарын үнэлгээ: 1,000+ мөр НЭГ удаа)."""
+    """keep_only_run-ийн олон (risk_ind_id, snapshot_date)-ийн хувилбар (тайлант өдрийн бүх үзүүлэлт, гарын үнэлгээ:
+    1,000+ мөр НЭГ удаа)."""
     if not pairs:
         return 0
     db, t = q(cfg.result_db), RESULT_TABLE
     params = {"r": run_id, "ids": sorted({str(i) for i, _ in pairs}),
               "keys": sorted({f"{i}|{d}" for i, d in pairs})}
-    sw = ("row_type = 'INDICATOR' AND indicator_id IN {ids:Array(String)} "
-          "AND concat(indicator_id, '|', toString(report_date)) IN {keys:Array(String)}")
+    sw = ("risk_ind_id IN {ids:Array(String)} "
+          "AND concat(risk_ind_id, '|', toString(snapshot_date)) IN {keys:Array(String)}")
     _, rows = conn.query(f"SELECT min(loaded_at) FROM {db}.{t} WHERE {sw} AND run_id = {{r:String}}", params)
     params["mine"] = rows[0][0]
     where = (f"{sw} AND run_id != {{r:String}} AND (loaded_at < {{mine:DateTime64(3)}} "
@@ -327,11 +354,9 @@ def keep_only_run_many(cfg: EnvConfig, conn: Connector, pairs: list[tuple], run_
     _, rows = conn.query(f"SELECT count() FROM {db}.{t} WHERE {where}", params)
     n = int(rows[0][0])
     if n:
-        conn.execute(f"INSERT INTO {db}.{HISTORY_TABLE} "
-                     f"(indicator_id, table_name, report_date, run_id, replaced_by_run, row_json) "
-                     f"SELECT indicator_id, '{t}', report_date, run_id, {{r:String}}, "
-                     f"formatRowNoNewline('JSONEachRow', *) FROM {db}.{t} WHERE {where}", params)
-        delete_verified(conn, f"{db}.{t}", where, params, "гарын үнэлгээний хуучин мөр")
+        conn.execute(f"INSERT INTO {db}.{HISTORY_TABLE} {_HIST_INSERT} {_HIST_SELECT} FROM {db}.{t} WHERE {where}",
+                     params)
+        delete_verified(conn, f"{db}.{t}", where, params, "хуучин мөр")
     return n
 
 
@@ -343,34 +368,41 @@ def discard_run(cfg: EnvConfig, conn: Connector, scope: dict, run_id: str) -> No
 
 
 def previous_value(cfg: EnvConfig, conn: Connector, indicator_id: str, report_date, metric: str = "value"):
-    """Өмнөх report_date-ийн үйл ажиллагааны түвшний утга. Байхгүй бол (None, None)."""
+    """Өмнөх тайлант өдрийн result_number. Байхгүй бол (None, None)."""
     db = q(cfg.result_db)
     _, rows = conn.query(
-        f"SELECT report_date, any(value) FROM {db}.{RESULT_TABLE} "
-        f"WHERE indicator_id = {{i:String}} AND row_type = 'INDICATOR' AND entity_level = 'ACTIVITY' "
-        f"AND metric = {{m:String}} AND report_date = (SELECT max(report_date) FROM {db}.{RESULT_TABLE} "
-        f"  WHERE indicator_id = {{i:String}} AND row_type = 'INDICATOR' AND report_date < {{d:Date}}) "
-        f"GROUP BY report_date", {"i": indicator_id, "d": report_date, "m": metric})
+        f"SELECT snapshot_date, any(result_number) FROM {db}.{RESULT_TABLE} "
+        f"WHERE risk_ind_id = {{i:String}} AND snapshot_date = (SELECT max(snapshot_date) FROM {db}.{RESULT_TABLE} "
+        f"  WHERE risk_ind_id = {{i:String}} AND snapshot_date < {{d:Date}}) "
+        f"GROUP BY snapshot_date", {"i": indicator_id, "d": report_date})
     return (rows[0][0], rows[0][1]) if rows else (None, None)
 
 
+def parse_score(result) -> float | None:
+    """ri_result.result → оноо (float); "Дунд" г.м. эсвэл хоосон бол None."""
+    try:
+        return float(result) if result not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def activity_inputs(cfg: EnvConfig, conn: Connector, branch_id: str, report_date) -> list[tuple]:
-    """Үйл ажиллагааны (BRANCHID) нэгтгэлд: (indicator_id, score, weight) — ACTIVITY түвшний мөрүүд."""
+    """Үйл ажиллагааны (BRANCHID) нэгтгэлд: [(risk_ind_id, оноо)] — жинг catalog-оос (activities/)."""
     _, rows = conn.query(
-        f"SELECT indicator_id, any(score), any(weight) FROM {q(cfg.result_db)}.{RESULT_TABLE} "
-        f"WHERE branch_id = {{b:String}} AND report_date = {{d:Date}} AND row_type = 'INDICATOR' "
-        f"AND entity_level = 'ACTIVITY' GROUP BY indicator_id", {"b": str(branch_id), "d": report_date})
-    return rows
+        f"SELECT risk_ind_id, any(result) FROM {q(cfg.result_db)}.{RESULT_TABLE} "
+        f"WHERE branch_id = {{b:String}} AND snapshot_date = {{d:Date}} AND risk_ind_id != '{TOTAL_ID}' "
+        f"GROUP BY risk_ind_id", {"b": str(branch_id), "d": report_date})
+    return [(r[0], parse_score(r[1])) for r in rows]
 
 
 # ── Цэвэрлэх, харах ───────────────────────────────────────────────────────────
-def _date_where(date_from, date_to, params: dict) -> str:
+def _date_where(date_from, date_to, params: dict, col: str = "report_date") -> str:
     where = "1 = 1"
     if date_from:
-        where += " AND report_date >= {d_from:Date}"
+        where += f" AND {col} >= {{d_from:Date}}"
         params["d_from"] = date_from
     if date_to:
-        where += " AND report_date <= {d_to:Date}"
+        where += f" AND {col} <= {{d_to:Date}}"
         params["d_to"] = date_to
     return where
 
@@ -378,10 +410,11 @@ def _date_where(date_from, date_to, params: dict) -> str:
 def count_results(cfg: EnvConfig, conn: Connector, indicator_ids: list[str], branch_ids: list[str],
                   date_from=None, date_to=None):
     params: dict = {"ids": indicator_ids or [""], "acts": [str(b) for b in branch_ids] or [""]}
-    where = (f"(indicator_id IN {{ids:Array(String)}} OR (row_type = 'ACTIVITY' AND branch_id IN "
-             f"{{acts:Array(String)}})) AND {_date_where(date_from, date_to, params)}")
-    _, rows = conn.query(f"SELECT report_date, row_type, count() FROM {q(cfg.result_db)}.{RESULT_TABLE} "
-                         f"WHERE {where} GROUP BY report_date, row_type ORDER BY report_date, row_type", params)
+    where = (f"(risk_ind_id IN {{ids:Array(String)}} OR (risk_ind_id = '{TOTAL_ID}' AND branch_id IN "
+             f"{{acts:Array(String)}})) AND {_date_where(date_from, date_to, params, 'snapshot_date')}")
+    _, rows = conn.query(f"SELECT snapshot_date, if(risk_ind_id = '{TOTAL_ID}', '{TOTAL_ID}', 'INDICATOR') AS k, "
+                         f"count() FROM {q(cfg.result_db)}.{RESULT_TABLE} "
+                         f"WHERE {where} GROUP BY snapshot_date, k ORDER BY snapshot_date, k", params)
     return rows, where, params
 
 
@@ -399,26 +432,22 @@ def delete_audit(cfg: EnvConfig, conn: Connector, indicator_ids: list[str], date
     return int(rows[0][0])
 
 
+_SHOW = ", ".join(c for c in RESULT_COLUMNS) + ", loaded_at"
+
+
 def read_rows(cfg: EnvConfig, conn: Connector, indicator_id: str, report_date, level: str | None = None):
-    params = {"i": indicator_id, "d": report_date}
-    lvl = ""
-    if level:
-        lvl = " AND entity_level = {l:String}"
-        params["l"] = level.upper()
-    return conn.query(
-        f"SELECT entity_level, entity_id, entity_name, metric, numerator, denominator, value, value_text, "
-        f"score, score_label, weight, data_status, run_id, sql_version FROM {q(cfg.result_db)}.{RESULT_TABLE} "
-        f"WHERE indicator_id = {{i:String}} AND report_date = {{d:Date}} AND row_type = 'INDICATOR'{lvl} "
-        f"ORDER BY entity_level = 'ACTIVITY' DESC, entity_level, entity_id, metric", params)
+    """Үзүүлэлтийн тухайн өдрийн ri_result-ийн мөр (үйл ажиллагаанд НЭГ)."""
+    return conn.query(f"SELECT {_SHOW} FROM {q(cfg.result_db)}.{RESULT_TABLE} "
+                      f"WHERE risk_ind_id = {{i:String}} AND snapshot_date = {{d:Date}} ORDER BY branch_id",
+                      {"i": indicator_id, "d": report_date})
 
 
 def read_activity(cfg: EnvConfig, conn: Connector, branch_id: str, report_date):
+    """Үйл ажиллагааны тухайн өдрийн бүх мөр: эхэнд TOTAL (нийт оноо), дараа нь үзүүлэлтүүд."""
     return conn.query(
-        f"SELECT row_type, indicator_id, indicator_name, source_kind, value, value_text, score, score_label, "
-        f"weight, level, n_indicators, n_scored, weight_coverage, data_status "
-        f"FROM {q(cfg.result_db)}.{RESULT_TABLE} WHERE branch_id = {{a:String}} AND report_date = {{d:Date}} "
-        f"AND (row_type = 'ACTIVITY' OR entity_level = 'ACTIVITY') "
-        f"ORDER BY row_type = 'ACTIVITY' DESC, indicator_id", {"a": str(branch_id), "d": report_date})
+        f"SELECT risk_ind_id, risk_indicator, result_number, result, solid, run_id, loaded_at "
+        f"FROM {q(cfg.result_db)}.{RESULT_TABLE} WHERE branch_id = {{a:String}} AND snapshot_date = {{d:Date}} "
+        f"ORDER BY risk_ind_id = '{TOTAL_ID}' DESC, risk_ind_id", {"a": str(branch_id), "d": report_date})
 
 
 # ── Retry, progress ───────────────────────────────────────────────────────────
@@ -442,24 +471,23 @@ def latest_status(cfg: EnvConfig, conn: Connector) -> dict:
 
 
 # ── verify, auto ──────────────────────────────────────────────────────────────
-VERIFY_COLUMNS = ("row_type", "indicator_id", "activity_id", "branch_id", "sol_id", "file_name", "entity_level",
-                  "entity_id", "metric", "numerator", "denominator", "value", "value_text", "score", "weight",
-                  "level", "n_scored", "period_start", "run_id", "sql_version")
+VERIFY_COLUMNS = RESULT_COLUMNS
 
 
 def read_indicator(cfg: EnvConfig, conn: Connector, indicator_id: str, report_date) -> list[dict]:
     """Үзүүлэлтийн тухайн өдрийн ri_result-ийн бүх мөр (dict)."""
     cols = list(VERIFY_COLUMNS)
     _, rows = conn.query(f"SELECT {', '.join(cols)} FROM {q(cfg.result_db)}.{RESULT_TABLE} "
-                         f"WHERE indicator_id = {{i:String}} AND report_date = {{d:Date}} AND row_type = 'INDICATOR'",
+                         f"WHERE risk_ind_id = {{i:String}} AND snapshot_date = {{d:Date}}",
                          {"i": indicator_id, "d": report_date})
     return [dict(zip(cols, r)) for r in rows]
 
 
 def read_activity_row(cfg: EnvConfig, conn: Connector, branch_id: str, report_date) -> dict | None:
+    """Үйл ажиллагааны нийт онооны (TOTAL) мөр."""
     cols = list(VERIFY_COLUMNS)
     _, rows = conn.query(f"SELECT {', '.join(cols)} FROM {q(cfg.result_db)}.{RESULT_TABLE} "
-                         f"WHERE branch_id = {{b:String}} AND report_date = {{d:Date}} AND row_type = 'ACTIVITY'",
+                         f"WHERE branch_id = {{b:String}} AND snapshot_date = {{d:Date}} AND risk_ind_id = '{TOTAL_ID}'",
                          {"b": str(branch_id), "d": report_date})
     return dict(zip(cols, rows[0])) if len(rows) == 1 else ({"_count": len(rows)} if rows else None)
 
@@ -474,13 +502,20 @@ def audit_of_run(cfg: EnvConfig, conn: Connector, run_id: str, indicator_id: str
 
 
 def written_versions(cfg: EnvConfig, conn: Connector, date_from, date_to) -> dict:
-    """{(indicator_id, report_date): sql_version} — ri_result-д одоо байгаа үзүүлэлтийн мөрүүд."""
+    """{(risk_ind_id, snapshot_date): sql_version} — ri_result-д одоо байгаа үзүүлэлтийн мөрүүд; хувилбар нь тэр
+    мөрийг бичсэн run-ий audit-аас (ri_result-д sql_version хадгалахгүй)."""
+    db = q(cfg.result_db)
     _, rows = conn.query(
-        f"SELECT indicator_id, report_date, any(sql_version) FROM {q(cfg.result_db)}.{RESULT_TABLE} "
-        f"WHERE row_type = 'INDICATOR' AND entity_level = 'ACTIVITY' "
-        f"AND report_date >= {{a:Date}} AND report_date <= {{b:Date}} GROUP BY indicator_id, report_date",
+        f"SELECT r.risk_ind_id AS i, r.snapshot_date AS d, a.v AS v "
+        f"FROM (SELECT risk_ind_id, snapshot_date, any(run_id) AS run_id FROM {db}.{RESULT_TABLE} "
+        f"      WHERE risk_ind_id != '{TOTAL_ID}' AND snapshot_date >= {{a:Date}} AND snapshot_date <= {{b:Date}} "
+        f"      GROUP BY risk_ind_id, snapshot_date) AS r "
+        f"LEFT JOIN (SELECT run_id, indicator_id, report_date, argMax(sql_version, started_at) AS v "
+        f"           FROM {db}.{AUDIT_TABLE} WHERE report_date >= {{a:Date}} AND report_date <= {{b:Date}} "
+        f"           GROUP BY run_id, indicator_id, report_date) AS a "
+        f"  ON a.run_id = r.run_id AND a.indicator_id = r.risk_ind_id AND a.report_date = r.snapshot_date",
         {"a": date_from, "b": date_to})
-    return {(r[0], r[1]): r[2] for r in rows}
+    return {(r[0], r[1]): r[2] or None for r in rows}
 
 
 def last_attempts(cfg: EnvConfig, conn: Connector, date_from, date_to) -> dict:

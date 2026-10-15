@@ -5,10 +5,9 @@
   python ri.py manual load output/manual/manual_ACT_01_20260930.xlsx --env dev
 
 SCORE бөглөсөн бол түүнийг (0 = Үнэлэхгүй), үгүй бол VALUE/VALUE_TEXT-ээс шатлалаар оноо тооцно.
-Мөр бүр ri_result-д row_type=INDICATOR, entity_level=ACTIVITY, source_kind=MANUAL болж бичигдэнэ,
-дараа нь үйл ажиллагааны нийт оноо дахин тооцогдоно.
+Мөр бүр ri_result-д (result_number = VALUE, result = оноо) бичигдэж, дараа нь үйл ажиллагааны нийт оноо
+дахин тооцогдоно. COMMENT, оруулсан хүн нь ri_execution_audit-д.
 """
-import csv
 import datetime as dt
 import getpass
 import os
@@ -16,10 +15,10 @@ import uuid
 from pathlib import Path
 
 from . import store
-from .config import OUTPUT_DIR, EnvConfig
+from .config import OUTPUT_DIR, ConfigError, EnvConfig, read_csv
 from .db import connect
 from .metadata import Catalog
-from .runner import print_activity_scores, refresh_activities, score_value
+from .runner import activity_sol_ids, print_activity_scores, refresh_activities, score_value
 
 COLUMNS = ["INDICATOR_ID", "BRANCH_ID", "ACTIVITY_ID", "ACTIVITY_NAME", "INDICATOR_NAME", "WEIGHT", "SCALE",
            "REQUIRED_INFO", "METHOD", "REPORT_DATE", "VALUE", "VALUE_TEXT", "SCORE", "COMMENT"]
@@ -69,7 +68,10 @@ def write_template(cat: Catalog, activity_ids, report_date: dt.date, path: Path 
             for r in range(2, ws.max_row + 1):
                 ws.cell(r, c).alignment = Alignment(wrap_text=True, vertical="top")
     ws.freeze_panes = "F2"
-    wb.save(path)
+    try:
+        wb.save(path)
+    except PermissionError as exc:                   # Windows: файл Excel-д нээлттэй
+        raise ConfigError(f"{path} нээлттэй байна (Excel?) — хаагаад дахин ажиллуулна уу") from exc
     return path
 
 
@@ -80,8 +82,7 @@ def read_file(path: Path) -> list[dict]:
         it = ws.iter_rows(values_only=True)
         head = [str(h or "").strip().upper() for h in next(it)]
         return [dict(zip(head, r)) for r in it if any(v not in (None, "") for v in r)]
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        return [{(k or "").strip().upper(): v for k, v in r.items()} for r in csv.DictReader(f)]
+    return [{(k or "").strip().upper(): v for k, v in r.items() if k} for r in read_csv(path)]
 
 
 def _num(v):
@@ -140,6 +141,7 @@ def load(cfg: EnvConfig, cat: Catalog, path: Path, default_date: dt.date | None 
         prepared.append({
             "report_date": d, "period_start": None, "row_type": "INDICATOR", "group_no": act.group_no,
             "activity_id": act.activity_id, "branch_id": str(act.branch_id or ""), "activity_name": act.name_mn,
+            "sol_id": activity_sol_ids(act, d),                  # ri_result.solid: тайлант өдрийн SOLID-ууд
             "indicator_id": iid, "indicator_name": ind.name_mn, "calc_id": iid, "source_kind": "MANUAL",
             "entity_level": "ACTIVITY", "entity_id": str(act.branch_id or act.activity_id),
             "entity_name": act.name_mn, "metric": ind.score_metric, "value": value, "value_text": text,
@@ -170,7 +172,7 @@ def load(cfg: EnvConfig, cat: Catalog, path: Path, default_date: dt.date | None 
     with connect(cfg, cfg.result_connection) as conn:
         store.ensure_base(cfg, conn)
         # Бүгдийг НЭГ insert → ClickHouse-оос буцааж уншиж мөр бүрийг тулгана (зөрвөл энэ run-ийг устгана)
-        store.insert_result_verified(cfg, conn, prepared, {"row_type": "INDICATOR", "source_kind": "MANUAL"}, run_id)
+        store.insert_result_verified(cfg, conn, prepared, {}, run_id)          # энэ run-ий бүх мөр
         replaced = store.keep_only_run_many(cfg, conn, keys, run_id)
         now = dt.datetime.now()
         store.write_audits(cfg, conn, [{
@@ -179,7 +181,8 @@ def load(cfg: EnvConfig, cat: Catalog, path: Path, default_date: dt.date | None 
             "execution_status": "SUCCESS", "started_at": now, "finished_at": now, "duration_seconds": 0,
             "result_row_count": 1, "affected_rows": None, "executed_by": user, "environment": cfg.env,
             "sql_version": p["sql_version"], "connection_name": "manual", "target_table": store.RESULT_TABLE,
-            "validation_detail": f"file={path.name}"} for p in prepared])
+            "validation_detail": f"file={path.name}" + (f"; comment={p['comment']}" if p["comment"] else "")}
+            for p in prepared])
         for p in prepared:
             touched.setdefault(p["report_date"], set()).add(p["activity_id"])
     print(f"{len(prepared)} мөр бичиж буцааж уншиж тулгав, өмнөх {replaced} мөр ri_history-д")

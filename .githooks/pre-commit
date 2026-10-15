@@ -1,6 +1,16 @@
 #!/bin/sh
 # Commit хийхээс өмнө static шалгалт. Идэвхжүүлэх:  git config core.hooksPath .githooks
-python3 ri.py check
+# Python: төслийн .venv (Windows: .venv/Scripts/python.exe) → python3 → python → py
+PY=""
+for c in .venv/bin/python .venv/Scripts/python.exe; do
+  [ -x "$c" ] && PY="$c" && break
+done
+if [ -z "$PY" ]; then
+  for c in python3 python py; do
+    command -v "$c" >/dev/null 2>&1 && PY="$c" && break
+  done
+fi
+"$PY" ri.py check
 status=$?
 if [ $status -ne 0 ]; then
   echo ""

@@ -25,8 +25,8 @@ master.xlsx ──ri.py import──► activities/_shared/sh_NNN.sql       (50 
               SOL мөрүүд ──► үйл ажиллагааны SOL-уудаар Σ тоологч / Σ хуваарь ──► шатлал → оноо 1–5
                                       ▼
      ClickHouse risk_assessment.ri_result  (бичээд буцааж уншиж мөр бүрээр тулгана)
-        INDICATOR × ACTIVITY мөр + SOL задаргаа · ACTIVITY нийт оноо, түвшин · audit · history
-        view: v_risk_indicators, v_activity_score, v_indicator_score, v_indicator_detail
+        activity, activity_id, solid, branch_id, risk_indicator, risk_ind_id, result_number, result, snapshot_date
+        мөр = үзүүлэлт × үйл ажиллагаа × өдөр; TOTAL = нийт оноо, түвшин · техникийн: audit, history, лавлах
 ```
 
 ## 1. Шинэ машин дээр суулгах
@@ -34,12 +34,30 @@ master.xlsx ──ri.py import──► activities/_shared/sh_NNN.sql       (50 
 Код нь DB-гүй хуулагдана — зөвхөн тохиргоог бөглөөд ажиллана. Python 3.10+ (Windows / Linux / macOS), Oracle-д
 Instant Client хэрэггүй (thin горим; Oracle 11g бол доорх 4-р алхам).
 
+**Windows** (PowerShell эсвэл cmd; Python-ийг python.org-оос, "Add python.exe to PATH"-тэй):
+
+```bat
+git clone https://github.com/osohoo586/risk_indicator.git C:\RA
+cd C:\RA
+py -3 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
+.venv\Scripts\python ri.py doctor --env dev
+```
+
+Яг тестэлсэн хувилбараар суулгах бол `requirements.txt`-ийн оронд `requirements-lock.txt`.
+
+Хавтсыг өөр машинаас шууд хуулбал `.venv`-ийг ХУУЛАХГҮЙ (машин бүрт шинээр үүсгэнэ). `config/*.csv`-г Excel-ээр
+засвал **"CSV UTF-8 (Comma delimited)"**-аар хадгална — энгийн "CSV" (cp1251) нь ү, ө үсгийг "?" болгоно
+(`;` тусгаарлагч, BOM-ыг runner өөрөө танина). Өдөр бүр автоматаар: `deploy\windows\ri_auto.cmd` → Task Scheduler
+(`schtasks` тушаал нь файлын дотор).
+
+**Linux / macOS:**
+
 ```bash
 git clone https://github.com/osohoo586/risk_indicator.git RA && cd RA
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt          # Windows: .venv\Scripts\pip install -r requirements.txt
-                                                   # яг тестэлсэн хувилбар: requirements-lock.txt
-cp .env.example .env                               # Windows: copy .env.example .env
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env
 ```
 
 1. **Нууц үг** (`.env`, git-д орохгүй; эсвэл серверийн орчны хувьсагч):
@@ -50,6 +68,8 @@ cp .env.example .env                               # Windows: copy .env.example 
    (`config/activity_units.csv` ашиглана); `params:` — BI тайлангийн PKEY; `audit:` — аудитын бүртгэлийн хүснэгт байвал.
 3. **`config/activity_map.csv`**: үйл ажиллагаа бүрийн BRANCHID (ТОДРУУЛАХ мөрүүд), `LAST_AUDIT_DATE`.
 4. Хуучин Oracle (thin-д холбогдохгүй, DPY-3010) бол `.env`-д `ORACLE_CLIENT_LIB=<instantclient folder>`.
+
+Windows-д `python` гэдгийн оронд `.venv\Scripts\python`:
 
 ```bash
 python ri.py doctor --env dev                      # сан, хувьсагч, холболт, ClickHouse эрх — бүгд ✔ болтол
@@ -169,7 +189,7 @@ python ri.py status RI_40_1520 REVIEW --env dev   # нийтлэг бол: statu
 | `retry --run-id` | Тухайн run-ий амжилтгүйг ижил хугацаагаар |
 | `manual template / load` | Гарын үнэлгээ (Excel) |
 | `aggregate -a -d` | Үйл ажиллагааны нийт оноог дахин тооцох |
-| `show -i / -a -d` | ri_result-ийг харах (SOL задаргаатай) |
+| `show -i / -a -d` | ri_result-ийг харах (үзүүлэлтийн мөр / үйл ажиллагааны бүх мөр) |
 | `report -a -d [--open]` | Үйл ажиллагааны HTML тайлан |
 | `import master.xlsx [--dry-run] [--update]` | Master-аас activities/ (давхардалгүй); `--update` — master хэсгийг шинэчилж, давтагдсан нэрийг нийтлэг тодорхойлолт болгоно |
 | `dedup master.xlsx [--open]` | Давхардлыг хэрхэн шийдсэн HTML тайлан (зөрүү, гэр бүл, төстэй нэр) |

@@ -66,27 +66,24 @@ python ri.py manual load output/manual/manual_1006_20260930.xlsx --env local [--
 
 ## 3. ClickHouse-д юу бичигдэх вэ
 
-`risk_assessment_local.ri_result` — нэг хүснэгт:
+`risk_assessment_local.ri_result` — нэг хүснэгт, мөр = үзүүлэлт × үйл ажиллагаа × тайлант өдөр:
 
-| row_type | entity_level | Мөр |
-|---|---|---|
-| INDICATOR | ACTIVITY | үзүүлэлт × үйл ажиллагаа: value, numerator, denominator, value_text, **score**, weight, branch_id, **sol_id** (үйл ажиллагааны SOLID-ууд), file_name, period_start |
-| INDICATOR | SOL / BANK / … | задаргаа (SOL бүрийн тоологч, хуваарь, утга) |
-| ACTIVITY | ACTIVITY | үйл ажиллагааны нийт оноо (value), level (Өндөр ≥ 3.5, Дунд ≥ 2.5, Бага), n_scored, weight_coverage |
+| activity | activity_id | solid | branch_id | risk_indicator | risk_ind_id | result_number | result | snapshot_date |
+|---|---|---|---|---|---|---|---|---|
+| Хүний нөөцийн удирдлагын … | ACT_40 | 862,896,897,898 | 1006 | Нийт оноо | TOTAL | 3.0 | Дунд | 2026-09-30 |
+| Хүний нөөцийн удирдлагын … | ACT_40 | 862,896,897,898 | 1006 | Хүний нөөцийн эргэц | RI_40_1545 | 0.2286 | 5 | 2026-09-30 |
+
+`solid` = тайлант өдрийн тухайн BRANCHID-ийн SOLID-ууд (metadata), `result` = оноо (TOTAL: түвшин). SOL бүрийн
+задаргаа хадгалагдахгүй (`--save-csv`). Багана бүрийн тайлбар: [docs/ui_tables.md](docs/ui_tables.md).
 
 ```sql
--- Үзүүлэлт бүр (хуучин risk_indicators-ийн хэлбэр)
-SELECT indicator_id, ra_name, branch_id, sol_id, scale, scale_text, score, last_workdate
-FROM   risk_assessment_local.v_risk_indicators
-WHERE  branch_id = '1006' AND last_workdate = '2026-09-30' ORDER BY indicator_id;
-
--- Бүх үйл ажиллагааны нийт оноо
-SELECT report_date, branch_id, activity_name, round(score, 2) AS score, level, n_scored, n_indicators
-FROM   risk_assessment_local.v_activity_score ORDER BY report_date, score DESC;
+SELECT risk_ind_id, risk_indicator, result_number, result, solid
+FROM   risk_assessment_local.ri_result
+WHERE  branch_id = '1006' AND snapshot_date = '2026-09-30' ORDER BY risk_ind_id = 'TOTAL' DESC, risk_ind_id;
 ```
 
 `python tests/local/ch_query.py "SQL"` эсвэл DBeaver / http://localhost:8123/play. UI-д: [docs/ui_tables.md](docs/ui_tables.md).
-Мөн: `python ri.py show --env local -i RI_40_1545 -d 2026-09-30` (SOL задаргаа), `-a 1006` (үйл ажиллагаа),
+Мөн: `python ri.py show --env local -i RI_40_1545 -d 2026-09-30` (нэг мөр), `-a 1006` (үйл ажиллагаа),
 `python ri.py report --env local -a 1006 -d 2026-09-30 --open` (HTML).
 
 ### Бичилтийн баталгаа
@@ -95,7 +92,7 @@ FROM   risk_assessment_local.v_activity_score ORDER BY report_date, score DESC;
 - Бичсэн мөр бүрийг ClickHouse-оос буцааж уншиж тулгана; зөрвөл устгаж `FAILED [INSERT_MISMATCH]`.
 - Дахин ажиллуулахад хуучин мөр `ri_history`-д шилжиж устгагдана; DELETE-ийн дараа үлдсэн эсэхийг заавал шалгана
   (үлдвэл дахин, бүтэхгүй бол `FAILED [DELETE_INCOMPLETE]` — давхардсан мөр чимээгүй үлдэхгүй).
-- Run бүр `ri_execution_audit`-д (төлөв, шалтгаан, хугацаа, sql_version).
+- Run бүр `ri_execution_audit`-д (төлөв, шалтгаан, хугацаа, sql_version); солигдсон мөр `ri_history`-д.
 
 ## 4. Шалгах
 
@@ -105,14 +102,14 @@ python ri.py verify --env local activities/act_40_human_resources/ -p 2026-Q3
 ```
 
 ```
-  ✔ RI_40_1520 2026-09-30  value=0.226044 score=5  (1 мөр, 1006)
-  ✔ RI_40_1545 2026-09-30  value=0.228571 score=5  (5 мөр, 1006)
-  ✔ 1006 ACT_40 2026-09-30 нийт оноо 3.160 Дунд (оноотой 38)
+  ✔ RI_40_1520 2026-09-30  value=0.226044 score=5  (1006)
+  ✔ RI_40_1545 2026-09-30  value=0.228571 score=5  (1006)
+  ✔ 1006 ACT_40 2026-09-30 нийт оноо 3.000 Дунд (оноотой 35)
 VERIFY: таарсан 13, зөрүүтэй 0, алгассан 0
 ```
 
-`verify` нь source дээр дахин тооцоолж ClickHouse-ийн мөр бүртэй (ACTIVITY + задаргаа, sol_id, file_name, оноо),
-audit-тай, үйл ажиллагааны нийт оноог үзүүлэлтүүдээс нь тулгана. Зөрвөл exit 1.
+`verify` нь source дээр дахин тооцоолж ri_result-ийн мөртэй (result_number, result, solid, branch_id, нэрс),
+audit-тай, нийт оноог (TOTAL) үзүүлэлтүүдээс нь тулгана. Зөрвөл exit 1.
 
 ```bash
 python ri.py auto --env local --all --plan --as-of 2026-10-14 --since 2026-07-01

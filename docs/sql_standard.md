@@ -86,8 +86,10 @@ Procedure ч READ ONLY transaction дотор ажиллана — хүснэг�
 
 **ClickHouse source:** `connection: clickhouse_dwh`, параметр `{p_report_date:Date}`, функц `countIf`, `toString` г.м.
 
-**Өөр үзүүлэлтийн үр дүнгээс:** `connection: clickhouse_ra`, `{{schema.ri}}.ri_result`-аас уншина,
-`dependencies: [RI_..]` заавал (жишээ: `activities/act_97_practice/ri_97_9006.sql`).
+**Өөр үзүүлэлтийн үр дүнгээс:** `connection: clickhouse_ra`, `{{schema.ri}}.ri_result`-аас (`result_number`,
+`risk_ind_id`, `snapshot_date = {p_report_date:Date}`) уншина, `dependencies: [RI_..]` заавал
+(жишээ: `activities/act_97_practice/ri_97_9006.sql`). ri_result-д SOL задаргаа хадгалагдахгүй тул үйл ажиллагааны
+түвшинд (`ENTITY_LEVEL = 'ACTIVITY'`, `ENTITY_ID = branch_id`).
 
 ## 3. Параметр
 
@@ -141,9 +143,10 @@ min_rows: 50                    # үүнээс цөөн мөр → VALIDATION_FA
 value_range: {min: 0, max: 1}   # SOL мөрийн VALUE хүрээнээс гарвал FAIL
 max_change_pct: {pct: 30}       # үйл ажиллагааны утга өмнөх үеэс 30%+ өөрчлөгдвөл WARNING
 empty_source: fail              # 0 мөр бол FAIL (default: WARNING, юу ч бичихгүй)
-check_sql: |                    # бичсэний дараа ClickHouse дээр: CHECK_NAME, CHECK_STATUS, MESSAGE
-  SELECT 'budget_positive' AS CHECK_NAME, if(sum(denominator) > 0, 'PASS', 'FAIL') AS CHECK_STATUS, '' AS MESSAGE
-  FROM {target_table} WHERE indicator_id = {p_indicator_id:String} AND run_id = {p_run_id:String}
+check_sql: |                    # бичсэний дараа ClickHouse-ийн ri_result дээр: CHECK_NAME, CHECK_STATUS, MESSAGE
+  SELECT 'plan_ratio' AS CHECK_NAME, if(countIf(result_number IS NULL) = 0, 'PASS', 'FAIL') AS CHECK_STATUS,
+         '' AS MESSAGE
+  FROM {target_table} WHERE risk_ind_id = {p_indicator_id:String} AND run_id = {p_run_id:String}
 ```
 
 Runner үргэлж: давхардсан (ENTITY_LEVEL, ENTITY_ID, METRIC), хоосон ENTITY_ID, стандарт багана, буцааж уншиж тулгах.

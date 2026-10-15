@@ -43,12 +43,12 @@ max_change_pct: {pct: 30}
 params: {p_pkeys: "TODO"}
 # min_rows: 100                   # салбарын тоо тогтоод тавина (дутуу ирвэл FAIL)
 check_sql: |
-  SELECT 'budget_positive' AS CHECK_NAME,
-         if(sum(denominator) > 0, 'PASS', 'FAIL') AS CHECK_STATUS,
-         concat('Үйл ажиллагааны төлөвлөгөө: ', toString(sum(denominator))) AS MESSAGE
+  SELECT 'plan_ratio' AS CHECK_NAME,
+         if(countIf(result_number IS NULL OR result_number < 0) = 0, 'PASS', 'FAIL') AS CHECK_STATUS,
+         concat('Биелэлт: ', toString(any(result_number)), ' (NULL = төлөвлөгөө 0 / алга)') AS MESSAGE
   FROM {target_table}
-  WHERE indicator_id = {p_indicator_id:String} AND report_date = {p_report_date:Date}
-    AND run_id = {p_run_id:String} AND entity_level = 'ACTIVITY'
+  WHERE risk_ind_id = {p_indicator_id:String} AND snapshot_date = {p_report_date:Date}
+    AND run_id = {p_run_id:String}
 ---*/
 WITH gl AS (
     SELECT g.BRANCH                         AS branch,

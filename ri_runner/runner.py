@@ -9,8 +9,9 @@
   3. Үзүүлэлт бүрд: тооцооллын мөрүүдээс өөрийн үйл ажиллагааны утгыг гаргана
        SOL мөр      → үйл ажиллагааны BRANCHID-ийн SOL-уудаар нэгтгэнэ (Σnumerator / Σdenominator)
        ACTIVITY мөр → өөрийн BRANCHID-тай мөр;  BANK мөр → банк нийтийн утга
-     → шатлалаар оноо (1–5) → ri_result (row_type=INDICATOR) → буцааж уншиж тулгана (зөрвөл устгаад FAILED).
-  4. Хөндөгдсөн үйл ажиллагаа бүрийн нийт оноо → ri_result (row_type=ACTIVITY).
+     → шатлалаар оноо (1–5) → ri_result-д НЭГ мөр (result_number = утга, result = оноо, solid = SOLID-ууд)
+     → буцааж уншиж тулгана (зөрвөл устгаад FAILED). SOL задаргаа нь зөвхөн дотоод (verify, --save-csv).
+  4. Хөндөгдсөн үйл ажиллагаа бүрийн нийт оноо → ri_result (risk_ind_id = TOTAL, result = түвшин).
 """
 import csv
 import datetime as dt
@@ -346,7 +347,7 @@ def activity_rows(ind: Indicator, act: Activity, calc_rows: list[dict], d: dt.da
 
 
 def activity_sol_ids(act: Activity, d: dt.date) -> str:
-    """Үйл ажиллагааны (BRANCHID) тайлант өдрийн SOLID-ууд: "808,810,811" — ri_result.sol_id metadata."""
+    """Үйл ажиллагааны (BRANCHID) тайлант өдрийн SOLID-ууд: "808,810,811" — ri_result.solid metadata."""
     if not act.branch_id:
         return ""
     try:
@@ -601,8 +602,10 @@ def target_rows(ctx: RunContext, calc: Indicator, t: Indicator, rows: list[dict]
             "run_id": ctx.run_id, "sql_version": version_of(ctx.cat, t)}
     act_sols = activity_sol_ids(act, d)
     out_rows = []
+    primary = t.score_metric if t.score_metric in agg else next(iter(sorted(agg)), None)
     for metric, a in sorted(agg.items()):
         r = dict(base, entity_level="ACTIVITY", entity_id=str(act.branch_id or act.activity_id),
+                 primary=metric == primary,           # ri_result-д хадгалагдах мөр (оноо тооцсон METRIC)
                  entity_name=act.name_mn, sol_id=act_sols, metric=metric, numerator=a["numerator"],
                  denominator=a["denominator"], value=a["value"], data_status=a["data_status"],
                  source_row_count=a["source_row_count"],
@@ -639,7 +642,7 @@ def _write_target(ctx: RunContext, calc: Indicator, t: Indicator, out: Outcome, 
         out.status, out.error_code = "FAILED", "BRANCH_NOT_MAPPED"
         out.error_message = f"{act.activity_id}-д BRANCHID алга (config/activity_map.csv эсвэл activity.yaml branch_id)"
         return
-    scope = {"indicator_id": t.indicator_id, "report_date": d, "row_type": "INDICATOR"}
+    scope = {"risk_ind_id": t.indicator_id, "snapshot_date": d}
     inserted = False
     try:
         checks = list(calc_checks)
@@ -702,25 +705,32 @@ def aggregate_activity(cfg: EnvConfig, cat: Catalog, conn: Connector, activity_i
     high, medium = scoring["high"], scoring["medium"]
     inds = [i for i in cat.by_activity(activity_id) if i.enabled and not i.example and i.weight]
     total_w = sum(i.weight or 0 for i in inds)
-    scored = [(iid, float(s), float(w)) for iid, s, w in store.activity_inputs(cfg, conn, act.branch_id, d)
-              if s is not None and s > 0 and w]
+    scored = activity_scored(cat, activity_id, store.activity_inputs(cfg, conn, act.branch_id, d))
     sw = sum(w for _, _, w in scored)
     value = sum(s * w for _, s, w in scored) / sw if sw else None
     lvl = risk_level(value, high, medium)
-    row = {"report_date": d, "row_type": "ACTIVITY", "group_no": act.group_no, "activity_id": activity_id,
-           "branch_id": str(act.branch_id or ""), "activity_name": act.name_mn, "indicator_id": "",
-           "indicator_name": "", "calc_id": "", "source_kind": "AGG", "entity_level": "ACTIVITY",
-           "entity_id": str(act.branch_id), "entity_name": act.name_mn, "metric": "score",
-           "sol_id": activity_sol_ids(act, d), "file_name": "",
-           "value": value, "level": lvl, "n_indicators": len(inds), "n_scored": len(scored),
-           "weight_coverage": (sw / total_w) if total_w else None, "weight": total_w,
-           "data_status": "OK" if value is not None else "NO_SCORES", "run_id": run_id}
-    scope = {"branch_id": str(act.branch_id), "report_date": d, "row_type": "ACTIVITY"}
+    row = {"report_date": d, "row_type": "ACTIVITY", "activity_id": activity_id,
+           "branch_id": str(act.branch_id or ""), "activity_name": act.name_mn,
+           "sol_id": activity_sol_ids(act, d), "value": value, "level": lvl, "run_id": run_id}
+    scope = {"branch_id": str(act.branch_id), "risk_ind_id": store.TOTAL_ID, "snapshot_date": d}
     store.insert_result_verified(cfg, conn, [row], scope, run_id)
     store.keep_only_run(cfg, conn, scope, run_id)
     return {"activity_id": activity_id, "branch_id": act.branch_id, "report_date": d, "value": value, "level": lvl,
-            "n_scored": len(scored), "n_indicators": len(inds), "coverage": row["weight_coverage"],
+            "n_scored": len(scored), "n_indicators": len(inds), "coverage": (sw / total_w) if total_w else None,
             "total_weight": total_w}
+
+
+def activity_scored(cat: Catalog, activity_id: str, inputs: list[tuple]) -> list[tuple]:
+    """[(risk_ind_id, оноо)] (ri_result) → [(id, оноо, жин)]: оноотой (> 0), энэ үйл ажиллагааны, жинтэй үзүүлэлт.
+    Жин нь activities/-аас (ri_result-д хадгалахгүй)."""
+    out = []
+    for iid, s in inputs:
+        ind = cat.indicators.get(iid)
+        if ind is None or ind.activity_id != activity_id or not ind.enabled or ind.example or not ind.weight:
+            continue
+        if s is not None and s > 0:
+            out.append((iid, float(s), float(ind.weight)))
+    return out
 
 
 def refresh_activities(cfg: EnvConfig, cat: Catalog, activity_ids, d: dt.date, run_id: str) -> list[dict]:

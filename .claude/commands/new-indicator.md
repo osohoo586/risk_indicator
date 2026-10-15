@@ -7,7 +7,8 @@ argument-hint: <Бүлэг> <№> [нэр] — дараа нь хуучин proc
 
 $ARGUMENTS
 
-Үр дүн нь ClickHouse-ийн `risk_assessment.ri_result`: үзүүлэлт × үйл ажиллагаа (BRANCHID) мөр + SOL задаргаа.
+Үр дүн нь ClickHouse-ийн `risk_assessment.ri_result`: үзүүлэлт × үйл ажиллагаа (BRANCHID) × өдөрт НЭГ мөр
+(result_number = утга, result = оноо, solid = SOLID-ууд). SOL задаргааг runner дотроо тооцно (хадгалахгүй).
 SQL нь зөвхөн утгыг тооцно; үйл ажиллагаа, BRANCHID, SOLID-ууд, оноо, жинг runner өөрөө. Дүрэм:
 [docs/sql_standard.md](../../docs/sql_standard.md).
 

@@ -5,12 +5,13 @@
 
 Алхам:
   1. seed_bank.py     Oracle (COREMIS, FINACLE, ERP, CARDZONE, JIRA) + ClickHouse cardzone_dwh, үр дүнгийн DB шинээр
-  2. check            1,382 үзүүлэлтийн static шалгалт (--env local)
-  3. run --all        303 автомат (9 нийтлэг тооцоолол × 35 үйл ажиллагаа + 20 өөрийн SQL) + 2 нэмэлт, Q2 ба Q3
-  4. manual           гарын 1,077 үзүүлэлтийн template → жишээ утгаар бөглөж load (Excel-ээр)
-  5. verify           source дээр дахин тооцоолж ClickHouse-тэй мөр бүрээр (бичихгүй)
-  6. эталон           bank_golden.py (SQL-ээс үл хамааран Python) ↔ ClickHouse: утга, тоологч, хуваарь, SOL
-                      задаргаа, оноо, sol_id, file_name, үйл ажиллагааны нийт оноо, түвшин
+  2. check            1,388 үзүүлэлтийн static шалгалт (--env local)
+  3. run --all        771 автомат (34 нийтлэг SQL + 11 өөрийн SQL) + act_97, Q2 ба Q3
+  4. manual           гарын 609 үзүүлэлтийн template → жишээ утгаар бөглөж load (Excel-ээр)
+  5. verify           source дээр дахин тооцоолж ClickHouse-ийн ri_result-тэй (бичихгүй)
+  6. эталон           bank_golden.py (SQL-ээс үл хамааран Python) ↔ runner (дахин тооцоолсон: утга, тоологч,
+                      хуваарь, SOL задаргаа, оноо, file_name, period_start) ↔ ri_result (result_number, result,
+                      solid, branch_id, нэрс; TOTAL: нийт оноо, түвшин), давхардсан түлхүүр 0
   7. тохиолдлууд      source-д бичих оролдлого хаагдах (Oracle, ClickHouse), дахин ажиллуулахад давхардахгүй
                       (ri_history), бүтцийн өөрчлөлт (2025-12-31 ↔ 2026-09-30 SOL), auto (устгасныг л нөхнө)
   8. алдааны тохиолдол түр activities/act_98_edge_cases/ (дуусахад устгана): timeout, procedure доторх UPDATE,
@@ -40,7 +41,11 @@ import bank_golden as G  # noqa: E402
 from ri_runner import orgmap  # noqa: E402
 from ri_runner.config import EnvConfig  # noqa: E402
 from ri_runner.db import RunnerError, classify_error, connect  # noqa: E402
+from ri_runner.dates import parse_period  # noqa: E402
 from ri_runner.metadata import apply_env_params, load_catalog  # noqa: E402
+from ri_runner.runner import RunContext, select  # noqa: E402
+from ri_runner.store import TOTAL_ID, fmt_score  # noqa: E402
+from ri_runner.verify import recompute  # noqa: E402
 from ri_runner.scale import UNELEHGUI, compute_score  # noqa: E402
 
 ENV = "local"
@@ -126,25 +131,39 @@ def _choose(ind, rng):
 
 
 # ── ClickHouse-оос унших ──────────────────────────────────────────────────────
-def read_results(cfg) -> tuple[dict, dict, dict]:
+RESULT_COLS = ["activity", "activity_id", "solid", "branch_id", "risk_indicator", "risk_ind_id", "result_number",
+               "result", "snapshot_date", "run_id"]
+
+
+def read_results(cfg) -> tuple[dict, dict, int]:
+    """ri_result: ({(risk_ind_id, өдөр): мөр}, {(branch_id, өдөр): TOTAL мөр}, давхардсан түлхүүрийн тоо)."""
     with connect(cfg, cfg.result_connection) as ch:
-        cols = ["row_type", "report_date", "indicator_id", "activity_id", "branch_id", "sol_id", "file_name",
-                "source_kind", "entity_level", "entity_id", "metric", "numerator", "denominator", "value",
-                "value_text", "score", "weight", "level", "n_scored", "n_indicators", "weight_coverage",
-                "period_start", "run_id"]
-        _, rows = ch.query(f"SELECT {', '.join(cols)} FROM `{cfg.result_db}`.ri_result "
-                           f"WHERE report_date IN {{d:Array(Date)}}", {"d": list(PERIODS.values())})
-    ind_rows, drill, acts = {}, defaultdict(dict), {}
+        _, rows = ch.query(f"SELECT {', '.join(RESULT_COLS)} FROM `{cfg.result_db}`.ri_result "
+                           f"WHERE snapshot_date IN {{d:Array(Date)}}", {"d": list(PERIODS.values())})
+    stored, totals, dups = {}, {}, 0
     for r in rows:
-        x = dict(zip(cols, r))
-        d = x["report_date"]
-        if x["row_type"] == "ACTIVITY":
-            acts[(x["branch_id"], d)] = x
-        elif x["entity_level"] == "ACTIVITY":
-            ind_rows.setdefault((x["indicator_id"], d), {})[x["metric"]] = x
-        else:
-            drill[(x["indicator_id"], d)][x["entity_id"]] = x
-    return ind_rows, drill, acts
+        x = dict(zip(RESULT_COLS, r))
+        key = (x["branch_id"], x["snapshot_date"]) if x["risk_ind_id"] == TOTAL_ID else (x["risk_ind_id"], x["snapshot_date"])
+        target = totals if x["risk_ind_id"] == TOTAL_ID else stored
+        dups += key in target
+        target[key] = x
+    return stored, totals, dups
+
+
+def engine_rows(cfg, cat) -> tuple[dict, dict]:
+    """Runner-ийн дотоод мөрүүд (source дээр дахин тооцоолсон, бичихгүй): ({(id, өдөр): {metric: ACTIVITY мөр}},
+    {(id, өдөр): {entity_id: задаргааны мөр}}) — ri_result-д хадгалахгүй тоологч / хуваарь / SOL-ийг эталонтой тулгана."""
+    ctx = RunContext(cfg, mode="VERIFY", cat=cat, period_starts={parse_period(p)[1]: parse_period(p)[0] for p in PERIODS})
+    runnable, _ = select(cat, cfg, all_=True)
+    rows = recompute(ctx, {d: [i for i in runnable if not i.example] for d in PERIODS.values()})
+    act, drill = {}, defaultdict(dict)
+    for key, rs in rows.items():
+        for r in rs:
+            if r["entity_level"] == "ACTIVITY":
+                act.setdefault(key, {})[r["metric"]] = r
+            else:
+                drill[key][r["entity_id"]] = r
+    return act, drill
 
 
 # ── Тохиолдлууд (хамгаалалт, дахин ажиллуулах, бүтэц, auto) ─────────────────────
@@ -313,7 +332,8 @@ def main() -> int:
 
     step("6. Эталон (bank_golden.py) ↔ ClickHouse")
     gold = G.expected(data, cat, list(PERIODS.values()))
-    ind_rows, drill, acts = read_results(cfg)
+    stored, totals, n_dup = read_results(cfg)
+    ind_rows, drill = engine_rows(cfg, cat)
     checks = []                                   # {indicator, date, ok, kind, detail}
     master = []                                   # мастерийн шатлалын асуудал
     scores_used: dict = {}
@@ -323,23 +343,37 @@ def main() -> int:
             checks.append({"indicator": iid, "date": str(d), "ok": False, "kind": ind.mode,
                            "detail": f"эталон алга: bank_golden.LOGIC-д '{g['calc']}' нэмнэ"})
             continue
-        got = (ind_rows.get((iid, d)) or {}).get(ind.score_metric)
+        got = (ind_rows.get((iid, d)) or {}).get(ind.score_metric)      # runner (дахин тооцоолсон)
+        res = stored.get((iid, d))                                         # ClickHouse ri_result
         prob = []
         if got is None:
             if g["value"] is None and not g["rows"]:
-                checks.append({"indicator": iid, "date": str(d), "ok": True, "kind": "empty",
-                               "detail": "source 0 мөр — бичигдээгүй (зөв)"})
+                ok = res is None
+                checks.append({"indicator": iid, "date": str(d), "ok": ok, "kind": "empty",
+                               "detail": "source 0 мөр — бичигдээгүй (зөв)" if ok else "source 0 мөр, ri_result-д мөр бий"})
                 continue
-            prob.append("ClickHouse-д мөр алга")
+            prob.append("runner мөр гаргасангүй")
         else:
             for f, gv in (("value", g["value"]), ("numerator", g["num"]), ("denominator", g["den"])):
                 if not close(got[f], gv):
-                    prob.append(f"{f}: эталон={gv} ClickHouse={got[f]}")
-            if str(got["branch_id"]) != str(g["branch"]):
-                prob.append(f"branch_id {got['branch_id']} ≠ {g['branch']}")
+                    prob.append(f"{f}: эталон={gv} runner={got[f]}")
             want_sols = ",".join(sorted(G.sols_of(data, g["branch"], d), key=lambda x: (len(x), x)))
-            if got["sol_id"] != want_sols:
-                prob.append(f"sol_id '{got['sol_id']}' ≠ '{want_sols}'")
+            # ri_result-ийн мөр (9 багана): утга, оноо, SOLID-ууд, BRANCHID, нэрс
+            act = cat.activities[ind.activity_id]
+            if res is None:
+                prob.append("ri_result-д мөр алга")
+            else:
+                if not close(res["result_number"], g["value"]):
+                    prob.append(f"result_number: эталон={g['value']} ri_result={res['result_number']}")
+                if (res["result"] or None) != fmt_score(got["score"]):
+                    prob.append(f"result: runner оноо={got['score']} ri_result={res['result']!r}")
+                if res["solid"] != want_sols:
+                    prob.append(f"solid '{res['solid']}' ≠ '{want_sols}'")
+                if str(res["branch_id"]) != str(g["branch"]):
+                    prob.append(f"branch_id {res['branch_id']} ≠ {g['branch']}")
+                if (res["activity_id"], res["activity"], res["risk_indicator"]) != (act.activity_id, act.name_mn,
+                                                                                       ind.name_mn):
+                    prob.append(f"нэр: {res['activity_id']} {res['activity'][:20]} / {res['risk_indicator'][:30]}")
             if got["file_name"] != ind.file_name:
                 prob.append(f"file_name {got['file_name']} ≠ {ind.file_name}")
             if got["period_start"] != g["start"]:
@@ -347,7 +381,7 @@ def main() -> int:
             want_drill = dict(g["rows"]) if g["level"] not in ("BANK", "ACTIVITY") else {}     # задаргаа: SOL, UNIT
             have = drill.get((iid, d), {})
             if set(have) != set(want_drill):
-                prob.append(f"задаргаа: эталон {len(want_drill)} мөр, ClickHouse {len(have)} "
+                prob.append(f"задаргаа: эталон {len(want_drill)} мөр, runner {len(have)} "
                             f"(илүү {sorted(set(have) - set(want_drill))[:3]}, дутуу {sorted(set(want_drill) - set(have))[:3]})")
             else:
                 bad = [k for k, r in want_drill.items() if not (close(have[k]["value"], r["value"])
@@ -357,7 +391,7 @@ def main() -> int:
             # Оноо: мастерийн шатлалыг гараар уншсан босготой
             if g["canon"]:
                 if not close(got["score"], g["score"]):
-                    prob.append(f"оноо: эталон={g['score']} ClickHouse={got['score']} (value={g['value']})")
+                    prob.append(f"оноо: эталон={g['score']} runner={got['score']} (value={g['value']})")
             elif ind.weight:
                 master.append({"indicator": iid, "date": str(d), "score": got["score"],
                                "scale": G.scale_key(ind.scale_text)[:160], "calc": g["calc"]})
@@ -368,13 +402,16 @@ def main() -> int:
     # Гарын үнэлгээ: оноо
     for d, exp in manual_expected.items():
         for iid, (kind, score) in sorted(exp.items()):
-            got = (ind_rows.get((iid, d)) or {}).get(cat.indicators[iid].score_metric)
+            got = stored.get((iid, d))
             if kind == "blank":
                 ok = got is None
                 detail = "" if ok else "бөглөөгүй мөр ClickHouse-д байна"
             else:
-                ok = got is not None and close(got["score"], score) and got["source_kind"] == "MANUAL"
-                detail = "" if ok else f"оноо: хүлээгдэх={score} ClickHouse={None if got is None else got['score']}"
+                branch = str(cat.activities[cat.indicators[iid].activity_id].branch_id)
+                want_sols = ",".join(sorted(G.sols_of(data, branch, d), key=lambda x: (len(x), x)))
+                ok = got is not None and (got["result"] or None) == fmt_score(score) and got["solid"] == want_sols
+                detail = "" if ok else (f"оноо: хүлээгдэх={score} ri_result={None if got is None else got['result']}, "
+                                        f"solid {None if got is None else got['solid']!r} ≠ {want_sols!r}")
                 scores_used[(iid, d)] = score
             checks.append({"indicator": iid, "date": str(d), "ok": ok, "kind": "manual", "score": score,
                            "detail": detail})
@@ -391,21 +428,22 @@ def main() -> int:
             sc = [(s, w) for s, w in pairs if s is not None and s > 0]
             sw = sum(w for _, w in sc)
             total = sum(s * w for s, w in sc) / sw if sw else None
-            got = acts.get((branch, d))
-            ok = got is not None and close(got["value"], total) and (got["level"] or "") == G.level(total) \
-                and int(got["n_scored"] or 0) == len(sc)
+            got = totals.get((branch, d))
+            ok = (got is not None and close(got["result_number"], total) and (got["result"] or "") == G.level(total)
+                  and got["solid"] == ",".join(sorted(G.sols_of(data, branch, d), key=lambda x: (len(x), x))))
             act_rows.append({"activity": aid, "group": act.group_no, "name": act.name_mn, "branch": branch,
                              "date": str(d), "total": total, "level": G.level(total), "n_scored": len(sc),
                              "n": len(inds), "weight": sum(w for _, w in pairs if w),
                              "coverage": sw / sum(w for _, w in pairs if w) if pairs else None,
-                             "ch_total": None if got is None else got["value"],
-                             "ch_level": None if got is None else got["level"], "ok": ok,
+                             "ch_total": None if got is None else got["result_number"],
+                             "ch_level": None if got is None else got["result"], "ok": ok,
                              "sols": ",".join(sorted(G.sols_of(data, branch, d), key=lambda x: (len(x), x)))})
     n_ok = sum(c["ok"] for c in checks)
     n_act_ok = sum(a["ok"] for a in act_rows)
     print(f"  үзүүлэлт × өдөр: {GREEN}{n_ok}{OFF} / {len(checks)} таарсан"
           + ("" if n_ok == len(checks) else f", {RED}{len(checks) - n_ok} зөрүүтэй{OFF}"))
-    print(f"  үйл ажиллагааны нийт оноо: {GREEN}{n_act_ok}{OFF} / {len(act_rows)} таарсан")
+    print(f"  үйл ажиллагааны нийт оноо: {GREEN}{n_act_ok}{OFF} / {len(act_rows)} таарсан"
+          f"; ri_result-д давхардсан түлхүүр {n_dup}")
     for c in [c for c in checks if not c["ok"]][:25]:
         print(f"    {RED}✘{OFF} {c['indicator']} {c['date']} {c['detail'][:200]}")
     for a in [a for a in act_rows if not a["ok"]][:10]:
@@ -419,29 +457,28 @@ def main() -> int:
     cases = guard_cases(cfg)
     # Дахин ажиллуулахад давхардахгүй, хуучин нь ri_history-д
     before = scalar(cfg, f"SELECT count() FROM `{cfg.result_db}`.ri_result WHERE branch_id = '1006' "
-                         f"AND report_date = '2026-09-30'")
+                         f"AND snapshot_date = '2026-09-30'")
     hist0 = scalar(cfg, f"SELECT count() FROM `{cfg.result_db}`.ri_history")
     rc, _ = ri("run", "--env", ENV, "activities/act_40_human_resources/", "-p", "2026-Q3")
     after = scalar(cfg, f"SELECT count() FROM `{cfg.result_db}`.ri_result WHERE branch_id = '1006' "
-                        f"AND report_date = '2026-09-30'")
+                        f"AND snapshot_date = '2026-09-30'")
     hist1 = scalar(cfg, f"SELECT count() FROM `{cfg.result_db}`.ri_history")
     cases.append({"case": "act_40-ийг дахин ажиллуулахад давхардахгүй", "ok": rc == 0 and before == after and hist1 > hist0,
                   "detail": f"ri_result {before} → {after} мөр, ri_history +{hist1 - hist0}"})
     # Бүгдийг (305 × Q3, 4 thread зэрэг) дахин ажиллуулахад нэг ч түлхүүр давхардахгүй (DELETE баталгаа)
     s0 = time.time()
     rc, out = ri("run", "--env", ENV, "--all", "-p", "2026-Q3")
-    dups = scalar(cfg, f"SELECT count() FROM (SELECT 1 FROM `{cfg.result_db}`.ri_result WHERE report_date IN "
-                       f"('2026-06-30', '2026-09-30') GROUP BY row_type, report_date, indicator_id, branch_id, "
-                       f"entity_level, entity_id, metric HAVING count() > 1)")
+    dups = scalar(cfg, f"SELECT count() FROM (SELECT 1 FROM `{cfg.result_db}`.ri_result WHERE snapshot_date IN "
+                       f"('2026-06-30', '2026-09-30') GROUP BY risk_ind_id, branch_id, snapshot_date HAVING count() > 1)")
     retried = out.count("DELETE-ийн дараа")
     cases.append({"case": "--all-ийг дахин ажиллуулахад давхардсан мөр 0", "ok": rc == 0 and dups == 0,
                   "detail": f"давхардсан түлхүүр {dups}, DELETE дахин оролдлого {retried}, {time.time() - s0:.0f}s"})
     # Бүтцийн өөрчлөлт: 2025-12-31 (snapshot 2026-01-01: 819) ↔ 2026-09-30 (818)
     rc, _ = ri("run", "--env", ENV, "-i", "RI_01_0027", "-d", "2025-12-31")
-    old = scalar(cfg, f"SELECT any(sol_id) FROM `{cfg.result_db}`.ri_result WHERE indicator_id = 'RI_01_0027' "
-                      f"AND report_date = '2025-12-31' AND entity_level = 'ACTIVITY'") or ""
-    new = scalar(cfg, f"SELECT any(sol_id) FROM `{cfg.result_db}`.ri_result WHERE indicator_id = 'RI_01_0027' "
-                      f"AND report_date = '2026-09-30' AND entity_level = 'ACTIVITY'") or ""
+    old = scalar(cfg, f"SELECT any(solid) FROM `{cfg.result_db}`.ri_result WHERE risk_ind_id = 'RI_01_0027' "
+                      f"AND snapshot_date = '2025-12-31'") or ""
+    new = scalar(cfg, f"SELECT any(solid) FROM `{cfg.result_db}`.ri_result WHERE risk_ind_id = 'RI_01_0027' "
+                      f"AND snapshot_date = '2026-09-30'") or ""
     cases.append({"case": "Бүтцийн өөрчлөлт (MAIN snapshot) автоматаар", "ok": rc == 0 and "819" in old.split(",")
                   and "818" not in old.split(",") and "818" in new.split(",") and "819" not in new.split(","),
                   "detail": f"2025-12-31: {old}  →  2026-09-30: {new}"})
@@ -505,7 +542,7 @@ def main() -> int:
     })
     OUT_JSON.write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     OUT_HTML.write_text(render(rep), encoding="utf-8")
-    all_ok = (n_ok == len(checks) and n_act_ok == len(act_rows) and all(c["ok"] for c in cases)
+    all_ok = (n_ok == len(checks) and n_act_ok == len(act_rows) and all(c["ok"] for c in cases) and not n_dup
               and rep["verify_rc"] == 0 and n_def_ok == len(definitions))
     print(f"\n{BOLD}{GREEN + 'АМЖИЛТТАЙ' if all_ok else RED + 'ЗӨРҮҮТЭЙ'}{OFF}{BOLD}: эталон {n_ok}/{len(checks)}, "
           f"нийт оноо {n_act_ok}/{len(act_rows)}, тохиолдол {rep['summary']['cases_ok']}/{len(cases)}, "

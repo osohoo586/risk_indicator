@@ -18,14 +18,13 @@ snapshot-ыг ашиглана (d-ээс өмнөх snapshot байхгүй бо
       өмнөх сүүлийн аудит (BRANCHID, LAST_AUDIT_DATE). Шинэ аудит орвол автоматаар.
   эс бөгөөс activity_map.csv LAST_AUDIT_DATE (эсвэл activity.yaml last_audit_date).
 """
-import csv
 import datetime as dt
 import threading
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
-from .config import CONFIG_DIR, PROJECT_ROOT
+from .config import CONFIG_DIR, PROJECT_ROOT, read_csv
 from .dates import to_date
 
 # Орчин бүр өөр файл ашиглаж болно (local тест: tests/local/...). config/<env>.yaml:
@@ -136,8 +135,7 @@ def _db_units(d: dt.date) -> list[dict]:
 def _read(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        return [{k.strip(): (v or "").strip() for k, v in r.items()} for r in csv.DictReader(f)]
+    return [{(k or "").strip(): (v or "").strip() for k, v in r.items() if k} for r in read_csv(path)]
 
 
 @lru_cache(maxsize=1)

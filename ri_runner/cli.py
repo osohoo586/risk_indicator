@@ -317,8 +317,8 @@ def cmd_clean(args) -> int:
             print(f"{cfg.result_db}.{store.RESULT_TABLE} алга — устгах зүйлгүй.")
             return 0
         counts, where, params = store.count_results(cfg, conn, ids, acts, d_from, d_to)
-        for d, row_type, cnt in counts:
-            print(f"  {cfg.result_db}.{store.RESULT_TABLE}  {to_date(d)}  {row_type:<9} {cnt} мөр")
+        for d, kind, cnt in counts:
+            print(f"  {cfg.result_db}.{store.RESULT_TABLE}  {to_date(d)}  {kind:<9} {cnt} мөр")
         if args.audit:
             print(f"  + {cfg.result_db}.{store.AUDIT_TABLE}-ийн холбогдох бүртгэл")
         if not counts and not args.audit:
@@ -361,7 +361,7 @@ def cmd_show(args) -> int:
             if iid not in cat.indicators:
                 print(f"Үзүүлэлт олдсонгүй: {iid}")
                 return 2
-            cols, rows = store.read_rows(cfg, conn, iid, d, args.level)
+            cols, rows = store.read_rows(cfg, conn, iid, d)
             title = f"{iid} {cat.indicators[iid].name_mn}"
         else:
             print("--indicator эсвэл --activity өгнө үү")
@@ -369,10 +369,17 @@ def cmd_show(args) -> int:
     if not rows:
         print("Тухайн огноонд мөр алга.")
         return 0
-    print(f"{cfg.result_db}.{store.RESULT_TABLE}  {title}  report_date={d}\n")
-    hide = {"run_id", "sql_version"}
+    print(f"{cfg.result_db}.{store.RESULT_TABLE}  {title}  snapshot_date={d}\n")
+    if len(rows) == 1:                                   # нэг мөр: багана бүрийг доош нь
+        for c, v in zip(cols, rows[0]):
+            print(f"  {c.lower():<15} {'' if v is None else v}")
+        print("\nSOL бүрийн задаргаа ri_result-д хадгалагдахгүй — харах бол: python ri.py run … --save-csv "
+              "(output/<env>/*.csv)")
+        return 0
+    hide = {"run_id", "loaded_at"}
     idx = [i for i, c in enumerate(cols) if c.lower() not in hide]
-    _print_table([cols[i] for i in idx], [[r[i] for i in idx] for r in rows], args.limit)
+    _print_table([cols[i] for i in idx], [[r[i] for i in idx] for r in rows], args.limit,
+                 w=max(12, min(28, 140 // max(1, len(idx)))))
     print(f"\n{len(rows)} мөр (харуулсан: {min(len(rows), args.limit)})")
     return 0
 
@@ -616,7 +623,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--env", required=True, choices=ENVIRONMENTS)
     s.add_argument("--indicator", "-i")
     s.add_argument("--activity", "-a", help="Үйл ажиллагааны нийт оноо + үзүүлэлт бүрийн оноо")
-    s.add_argument("--level", help="ACTIVITY / SOL (зөвхөн тэр түвшин)")
     s.add_argument("--date", "-d", required=True)
     s.add_argument("--limit", type=int, default=30)
     s.set_defaults(func=cmd_show)

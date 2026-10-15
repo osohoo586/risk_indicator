@@ -30,27 +30,21 @@ GROUP  BY b.SOL_ID
    DBeaver «RA ClickHouse — үр дүн (local docker)» холболт, эсвэл http://localhost:8123/play
    (Query-г энэ файлд uncomment хийхгүй — тэгвэл Oracle дээр SQL-тэй хамт ажиллаж алдаа өгнө.)
 
-   1) Run-ээс ӨМНӨ   (а) → status = БАЙХГҮЙ, rows = 0      (б), (в) → хоосон
+   1) Run-ээс ӨМНӨ   (а) → status = БАЙХГҮЙ, rows = 0      (б) → хоосон
    2) Ажиллуулах     python ri.py run --env local activities/act_97_practice/ri_97_9004.sql -p 2026-Q3
-   3) Run-ий ДАРАА   (а) → status = БАЙНА, rows = 1 + 12   (б) → салбарын сүлжээний (1500) утга, оноо, SOLID-ууд
-                     (в) → SOL бүрийн хэтэрсэн / нийт үлдэгдэл
+   3) Run-ий ДАРАА   (а) → status = БАЙНА, rows = 1        (б) → салбарын сүлжээний (1500) утга, оноо, SOLID-ууд
+                     (в) SOL бүрийн задаргаа ri_result-д хадгалагдахгүй: run … --save-csv → output/local/ri_97_9004_20260930.csv
                      Дахин run хийвэл rows хэвээр (хуучин мөр ri_history-д шилжинэ — давхардахгүй)
    4) Тулгах         python ri.py verify --env local activities/act_97_practice/ri_97_9004.sql -p 2026-Q3
 
 -- (а) ri_result-д орсон эсэх
 SELECT if(count() = 0, 'БАЙХГҮЙ', 'БАЙНА') AS status, count() AS rows
 FROM   risk_assessment_local.ri_result
-WHERE  indicator_id = 'RI_97_9004' AND report_date = '2026-09-30';
+WHERE  risk_ind_id = 'RI_97_9004' AND snapshot_date = '2026-09-30';
 
--- (б) Үйл ажиллагааны (BRANCHID 1500) утга, оноо
-SELECT indicator_id, ra_name, branch_id, sol_id, scale, scale_text, numerator, denominator, score, last_workdate,
-       file_name, run_id, loaded_at
-FROM   risk_assessment_local.v_risk_indicators
-WHERE  indicator_id = 'RI_97_9004' AND last_workdate = '2026-09-30';
-
--- (в) Задаргаа (SOL бүрээр)
-SELECT entity_level, entity_id, entity_name, numerator, denominator, value, value_text
+-- (б) Үйл ажиллагааны (BRANCHID 1500) утга, оноо, SOLID-ууд
+SELECT activity, activity_id, solid, branch_id, risk_indicator, risk_ind_id, result_number, result,
+       snapshot_date, run_id, loaded_at
 FROM   risk_assessment_local.ri_result
-WHERE  indicator_id = 'RI_97_9004' AND report_date = '2026-09-30' AND entity_level != 'ACTIVITY'
-ORDER  BY entity_id;
+WHERE  risk_ind_id = 'RI_97_9004' AND snapshot_date = '2026-09-30';
 ═════════════════════════════════════════════════════════════════════════════════════════════════ */

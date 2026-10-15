@@ -180,7 +180,7 @@ class Indicator:
             h.update(json.dumps(self.manifest, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"))
             return f"{self.version}+{h.hexdigest()[:8]}"
         try:
-            h.update(self.file_path.read_bytes())
+            h.update(self.file_path.read_bytes().replace(b"\r\n", b"\n"))   # Windows (CRLF) / Linux ижил хувилбар
             body = self.read_sql() if self.mode == "sql" or self.is_calc else ""
             if body.strip():
                 h.update(body.encode("utf-8"))

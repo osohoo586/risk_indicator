@@ -20,7 +20,7 @@ import zipfile
 from collections import defaultdict
 from pathlib import Path
 
-from .config import ACTIVITIES_DIR, OUTPUT_DIR, TEMPLATES_DIR
+from .config import ACTIVITIES_DIR, OUTPUT_DIR, TEMPLATES_DIR, read_text_any
 from .metadata import SHARED_DIR, infer_period, load_catalog, split_front_matter
 from .scale import parse_scale_text
 
@@ -43,8 +43,9 @@ def read_table(path: Path, sheet: str | None = None) -> list[list]:
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         ws = wb[sheet] if sheet else wb.worksheets[0]
         return [["" if v is None else v for v in r] for r in ws.iter_rows(values_only=True)]
-    text = path.read_text(encoding="utf-8-sig")
-    delim = "\t" if text.split("\n", 1)[0].count("\t") >= 3 else ","
+    text = read_text_any(path)                       # UTF-8 эсвэл Windows-ийн Excel (cp1251)
+    head = text.split("\n", 1)[0]
+    delim = "\t" if head.count("\t") >= 3 else (";" if head.count(";") > head.count(",") else ",")
     return [r for r in csv.reader(text.splitlines(keepends=True), delimiter=delim)]
 
 

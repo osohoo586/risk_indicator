@@ -1,4 +1,6 @@
 """Орчны тохиргоо (config/<env>.yaml) болон .env унших."""
+import csv
+import io
 import os
 import re
 from pathlib import Path
@@ -22,6 +24,23 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]*$")
 
 class ConfigError(Exception):
     pass
+
+
+def read_text_any(path: Path) -> str:
+    """Текст файл: UTF-8 (BOM-той ч), эсвэл Windows-ийн Excel-ээр хадгалсан CSV (cp1251 кирилл)."""
+    raw = Path(path).read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1251", errors="replace")
+
+
+def read_csv(path: Path) -> list[dict]:
+    """CSV → мөрүүд. Excel-ийн тусгаарлагч ',' / ';' / tab, кодчилол UTF-8 / cp1251 — аль нь ч болно."""
+    text = read_text_any(path)
+    head = text.split("\n", 1)[0]
+    delim = max((",", ";", "\t"), key=head.count)
+    return list(csv.DictReader(io.StringIO(text, newline=""), delimiter=delim))
 
 
 def load_dotenv(path: Path = PROJECT_ROOT / ".env") -> None:

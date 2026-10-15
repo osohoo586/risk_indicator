@@ -6,7 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Risk assessment (RA) indicators for a bank. `master.xlsx` (35 activities, 1,380 indicators) is imported into
 `activities/`; the runner computes them from read-only sources (Oracle COREMIS / FINACLE / ERP / CARDZONE / JIRA,
-ClickHouse DWH) and writes to one ClickHouse table, `risk_assessment.ri_result`.
+ClickHouse DWH) and writes to one ClickHouse table, `risk_assessment.ri_result`, whose columns the user fixed:
+`activity, activity_id, solid, branch_id, risk_indicator, risk_ind_id, result_number, result, snapshot_date`
+(+ technical `run_id, loaded_at`). One row per indicator × activity (BRANCHID) × report date; `solid` is metadata (the
+activity's SOLIDs that day, "862,896"); `result` = score "1"…"5"; `risk_ind_id = 'TOTAL'` = activity total
+(`result_number` = Σ(w×score)/Σw, `result` = Өндөр/Дунд/Бага). SOL drill-down, numerator/denominator, weight are NOT
+stored (internal rows → `store.to_result_rows`; drill-down via `--save-csv`, verify, demo_check `engine_rows`).
 
 - **SOLID** = smallest org unit; **BRANCHID** groups SOLIDs; **one activity = one BRANCHID** (`config/activity_map.csv`,
   groups 2, 10, 11, 20, 21 are still unmapped = ТОДРУУЛАХ). SOLID → BRANCHID comes from `COREMIS.MAIN` at the report
@@ -79,8 +84,10 @@ Dates: `-p 2026-Q3` (repeatable; sets `RunContext.period_starts[end] = start` an
   4. Per target, `target_rows` (shared with `verify`; ACTIVITY level = the activity's own BRANCHID row, missing →
      "no data") → `activity_rows` (SOL filtering via `orgmap.sols_for`, `aggregate`:
      Σnum/Σden; Σvalue when no denominator or `rollup_metrics: {value: sum}`; texts collected) → `score_value`
-     (numeric value and each `VALUE_TEXT` scored, highest wins) → rows with `sol_id` (activity SOLIDs), `file_name`,
-     `sql_version` (`version_of`: file hash + calc hash + params hash).
+     (numeric value and each `VALUE_TEXT` scored, highest wins) → internal rows (ACTIVITY row flagged `primary` for
+     the score metric + drill rows, `sol_id`, `file_name`); `store.to_result_rows` keeps only the primary ACTIVITY
+     row (and TOTAL rows). `sql_version` (`version_of`: file hash + calc hash + params hash) goes to the audit;
+     `auto` reads it back by joining ri_result.run_id with the audit (`store.written_versions`).
   5. `_write_target`: `store.insert_result_verified` (insert, read back by scope + run_id, `written_diff`; mismatch →
      discard → `INSERT_MISMATCH`), `check_sql`. Older rows of written scopes are collected in `ctx.replaced` and
      removed by `_replace_old` with ONE `keep_only_run_many` per report date (→ `ri_history`, deleted); groups whose
@@ -121,7 +128,10 @@ Dates: `-p 2026-Q3` (repeatable; sets `RunContext.period_starts[end] = start` an
   (each decision, 24 name families, 18 near-duplicates — reported, never merged).
 - **ClickHouse objects** (`ddl/clickhouse/`, `store.ensure_base` creates, adds new columns with `ADD COLUMN IF NOT EXISTS`):
   `ri_result`, `ri_execution_audit`, `ri_history`, `ri_activity` / `ri_indicator` (ReplacingMergeTree, synced from
-  `activities/` by `sync_meta`), views `v_activity_score`, `v_indicator_score`, `v_indicator_detail`, `v_risk_indicators`.
+  `activities/` by `sync_meta`), views `v_activity_score`, `v_indicator_score`. A legacy-layout `ri_result` (no
+  `risk_ind_id`) is renamed to `ri_result_legacy_<ts>` by `ensure_base`, never dropped. Scopes: indicator
+  `(risk_ind_id, snapshot_date)`, total `(branch_id, 'TOTAL', snapshot_date)`. Aggregation weights come from the
+  catalog (`runner.activity_scored`), not from ri_result.
 
 ## Local demo (tests/local/)
 
@@ -157,6 +167,10 @@ Dates: `-p 2026-Q3` (repeatable; sets `RunContext.period_starts[end] = start` an
 - `{{shared.x}}` expands to `(\n<select>\n)` — write `FROM {{shared.erp.sol_flow}} f`, not `FROM ({{shared…}})`.
 - Oracle DDL in the demo uses `VARCHAR2(n CHAR)` (Cyrillic is 2 bytes per char).
 - CI runs Python 3.10: no PEP 701 f-strings (no backslashes or same quotes inside `{…}`).
+- Production runs on **Windows** (Task Scheduler: `deploy/windows/ri_auto.cmd`). Always pass `encoding="utf-8"` to
+  file IO and subprocess; read user-edited CSV with `config.read_csv` (UTF-8/BOM or cp1251, `,`/`;`/tab — cp1251 has
+  no ү/ө, so docs tell users to save "CSV UTF-8"); `ri.py` reconfigures stdout to UTF-8; `sql_version` hashes files
+  with CRLF normalized; `.gitattributes` forces LF (CRLF for `.cmd/.bat`).
 - Team workflow: one owner per activity folder; changes to `ri_runner/`, `config/`, `ddl/`, `templates/`, `shared/`,
   `activities/_shared/` go in a separate MR. Status lifecycle `TODO → IN_PROGRESS → REVIEW → TESTED → DONE`
   (`python ri.py status`); prod runs TESTED+ only. `/new-indicator` turns legacy SQL / procedures into an indicator file.
