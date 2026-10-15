@@ -1,5 +1,6 @@
 """Туслах командууд: doctor (орчин шалгах), import (master жагсаалт), status (төлөв солих)."""
 import importlib
+import os
 import re
 import sys
 import time
@@ -7,7 +8,8 @@ from pathlib import Path
 
 from . import orgmap, scaffold, store
 from .checks import run_checks
-from .config import LOCAL_ENVIRONMENTS, PROJECT_ROOT, ConfigError, EnvConfig, load_period
+from .config import (LOCAL_ENVIRONMENTS, PROJECT_ROOT, ConfigError, EnvConfig, load_dotenv, load_period,
+                     vars_in)
 from .db import connect
 from .metadata import FREQUENCIES, STATUSES, apply_env_params, load_catalog, split_front_matter
 
@@ -36,30 +38,42 @@ def doctor(env: str) -> int:
 
     print(f"\n[2] Тохиргоо")
     secrets = (PROJECT_ROOT / ".env").exists()
-    if env in LOCAL_ENVIRONMENTS:            # local: docker-ийн default нууц үг (config/local.yaml)
-        line(OK if secrets else SKIP, ".env", "" if secrets else f"{env}-д заавал биш (docker default)")
-    else:
-        line(OK if secrets else BAD, ".env", "" if secrets else "cp .env.example .env")
+    load_dotenv()
     try:
         cfg = EnvConfig(env)
         line(OK, f"config/{env}.yaml", f"result → {cfg.result_connection}.{cfg.result_db}")
     except ConfigError as exc:
         line(BAD, f"config/{env}.yaml", str(exc))
         return 1
+    cat = load_catalog()
+    apply_env_params(cat, cfg)
+    used = ({i.connection for i in cat.indicators.values()} | {cfg.result_connection}
+            | {(cfg.raw.get(k) or {}).get("connection") for k in ("org", "audit")}) & set(cfg.connections)
+    # Шинэ машин: аль ${VAR} дутууг холболтоор нь (ашиглагдах холболтынх л заавал)
+    missing = {n: [v for v in vars_in(cfg.connections[n]) if not os.environ.get(v)] for n in cfg.connections}
+    need = sorted({v for n in used for v in missing[n]})
+    if env in LOCAL_ENVIRONMENTS:            # local: docker-ийн default нууц үг (config/local.yaml)
+        line(OK if secrets else SKIP, ".env", "" if secrets else f"{env}-д заавал биш (docker default)")
+    elif secrets or not need:                # файл эсвэл серверийн env хувьсагч (Airflow, CI) — аль нь ч болно
+        line(OK, ".env" if secrets else "env хувьсагч", "" if secrets else "файлгүй — орчны хувьсагчаас")
+    else:
+        line(BAD, ".env", "cp .env.example .env — дараа нь доорх хувьсагчдыг бөглөнө")
+    if need:
+        line(BAD, "Дутуу хувьсагч", ", ".join(need))
+    other = sorted({v for n in set(cfg.connections) - used for v in missing[n]})
+    if other:
+        line(SKIP, "Ашиглагдаагүй холболтын хувьсагч", ", ".join(other) + " (заавал биш)")
     per = load_period()
     line(OK if per else SKIP, "config/period.yaml",
          f"{per.get('start_date', '')} … {per.get('end_date') or per.get('period', '')}" if per else "алга (--date ашиглана)")
     orgmap.use(cfg)
     line(OK, "BRANCHID → SOLID", orgmap.source())
     line(OK, "Аудитын огноо", orgmap.audit_source())
-    cat = load_catalog()
-    apply_env_params(cat, cfg)
     errors, warnings = run_checks(cat)
     line(OK if not errors else BAD, f"Үзүүлэлтүүд ({len(cat.indicators)})",
          f"{len(errors)} алдаа, {len(warnings)} анхааруулга" + (" → python ri.py check" if errors else ""))
 
     print(f"\n[3] Холболтууд ({env})")
-    used = {i.connection for i in cat.indicators.values()} | {cfg.result_connection}
     for name in cfg.connections:
         users = sum(1 for i in cat.indicators.values() if i.connection == name)
         label = f"{name} ({cfg.connections[name].get('type')})"

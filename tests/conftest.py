@@ -23,7 +23,8 @@ def make_ind(tmp_path):
         iid = kw.pop("indicator_id", "RI_05_0001")
         folder = tmp_path / "act_05_test"
         folder.mkdir(exist_ok=True)
-        (folder / f"{iid.lower()}.sql").write_text(f"/*---\nindicator_id: {iid}\n---*/\nSELECT 1 AS VALUE FROM dual\n")
+        (folder / f"{iid.lower()}.sql").write_text(f"/*---\nindicator_id: {iid}\n---*/\nSELECT 1 AS VALUE FROM dual\n",
+                                                   encoding="utf-8")
         base = dict(indicator_id=iid, activity_id="ACT_05", folder=folder, name_mn="Тест", name_en="", description="",
                     owner="", reviewer="", connection="oracle_whouse", frequency="quarterly", execution_order=100,
                     dependencies=[], enabled=True, timeout_seconds=0, status="IN_PROGRESS", version="0.1.0",

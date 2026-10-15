@@ -1,0 +1,5 @@
+# Мөрийн төгсгөл бүх машин дээр LF — sql_version (файлын hash) Windows / Linux дээр ижил байна
+* text=auto eol=lf
+*.bat text eol=crlf
+*.xlsx binary
+*.png binary

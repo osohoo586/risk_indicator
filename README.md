@@ -29,16 +29,39 @@ master.xlsx ──ri.py import──► activities/_shared/sh_NNN.sql       (50 
         view: v_risk_indicators, v_activity_score, v_indicator_score, v_indicator_detail
 ```
 
-## 1. Эхлэх
+## 1. Шинэ машин дээр суулгах
+
+Код нь DB-гүй хуулагдана — зөвхөн тохиргоог бөглөөд ажиллана. Python 3.10+ (Windows / Linux / macOS), Oracle-д
+Instant Client хэрэггүй (thin горим; Oracle 11g бол доорх 4-р алхам).
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-git config core.hooksPath .githooks            # commit бүрт python3 ri.py check
-cp .env.example .env                           # dev / test / prod-ийн нууц үг (git-д орохгүй)
-python ri.py doctor --env dev                  # сан, холболт, ClickHouse эрх
+git clone https://github.com/osohoo586/risk_indicator.git RA && cd RA
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt          # Windows: .venv\Scripts\pip install -r requirements.txt
+                                                   # яг тестэлсэн хувилбар: requirements-lock.txt
+cp .env.example .env                               # Windows: copy .env.example .env
 ```
 
-**Local (Docker Oracle + ClickHouse, стандарт банкны demo DB)** — prod-той ижил бүтэц, нууц үг хэрэггүй:
+1. **Нууц үг** (`.env`, git-д орохгүй; эсвэл серверийн орчны хувьсагч):
+   `DEV_ORACLE_WHOUSE=user/password@host:1521/service`, `DEV_CH_HOST`, `DEV_CH_PORT` (8123), `DEV_CH_USER`,
+   `DEV_CH_PASSWORD`. test / prod-д `TEST_*`, `PROD_*`. Аль нь дутууг `doctor` нэрээр нь хэлнэ.
+2. **`config/<env>.yaml`**: `schemas:` — SQL-ийн `{{schema.finacle}}` г.м.-ийг танай DB-ийн schema нэр болгоно;
+   `connections:` — ClickHouse-ийн database (`clickhouse_dwh`); `org:` — `COREMIS.MAIN`-д эрхгүй бол хасна
+   (`config/activity_units.csv` ашиглана); `params:` — BI тайлангийн PKEY; `audit:` — аудитын бүртгэлийн хүснэгт байвал.
+3. **`config/activity_map.csv`**: үйл ажиллагаа бүрийн BRANCHID (ТОДРУУЛАХ мөрүүд), `LAST_AUDIT_DATE`.
+4. Хуучин Oracle (thin-д холбогдохгүй, DPY-3010) бол `.env`-д `ORACLE_CLIENT_LIB=<instantclient folder>`.
+
+```bash
+python ri.py doctor --env dev                      # сан, хувьсагч, холболт, ClickHouse эрх — бүгд ✔ болтол
+python ri.py init-db --env dev                     # ri_result, audit, history, view (байхгүй бол үүсгэнэ)
+python ri.py run --env dev --all -p 2026-Q3 --dry-run   # SQL бүр танай DB дээр ажиллаж байгаа эсэх (бичихгүй)
+python ri.py run --env dev --all -p 2026-Q3 && python ri.py verify --env dev --all -p 2026-Q3
+```
+
+Хөгжүүлэгч: `pip install -r requirements-dev.txt`, `git config core.hooksPath .githooks` (commit бүрт `ri.py check`),
+`pytest` (DB-гүй).
+
+**Local (Docker Oracle + ClickHouse, стандарт банкны demo DB)** — заавал биш, бодит DB-гүйгээр туршихад:
 
 ```bash
 ./tests/local/setup.sh                         # container, demo DB (COREMIS, FINACLE, ERP, CARDZONE, JIRA), init-db

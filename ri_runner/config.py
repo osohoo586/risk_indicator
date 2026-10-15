@@ -55,6 +55,11 @@ def resolve_vars(value):
     return value
 
 
+def vars_in(value) -> list[str]:
+    """${VAR} (default-гүй) нэрс — doctor шинэ машин дээр аль хувьсагч дутууг хэлнэ."""
+    return sorted({m.group(1) for m in _VAR_RE.finditer(str(value)) if m.group(2) is None})
+
+
 class EnvConfig:
     def __init__(self, env: str):
         if env not in ENVIRONMENTS:

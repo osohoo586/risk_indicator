@@ -14,12 +14,13 @@ prod-д зөвхөн status TESTED / DONE үзүүлэлт ажиллана (con
 Юу ажиллахыг харах: python ri.py auto --env prod --all --plan
 Урт хугацааг нөхөх:  python ri.py auto --env prod --all --since 2026-01-01
 """
+import os
 from datetime import datetime
 
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.sdk import DAG
 
-RI_HOME = "/opt/risk_indicators"          # git clone хийсэн газар (.venv, .env-тэй)
+RI_HOME = os.environ.get("RI_HOME", "/opt/risk_indicators")   # git clone хийсэн газар (.venv, .env-тэй)
 
 with DAG(
     dag_id="risk_indicators",

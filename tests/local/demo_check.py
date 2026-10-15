@@ -23,6 +23,7 @@ import datetime as dt
 import html
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -49,7 +50,8 @@ GREEN, RED, YELLOW, CYAN, DIM, BOLD, OFF = "\033[32m", "\033[31m", "\033[33m", "
 
 
 def ri(*args, timeout=900) -> tuple[int, str]:
-    out = subprocess.run([sys.executable, "ri.py", *args], cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+    out = subprocess.run([sys.executable, "ri.py", *args], cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=timeout)
     return out.returncode, out.stdout + out.stderr
 
 
@@ -258,7 +260,8 @@ def main() -> int:
     if not args.no_seed:
         step("1. Demo DB (seed_bank.py) + үр дүнгийн DB шинээр")
         s = time.time()
-        p = subprocess.run([sys.executable, "tests/local/seed_bank.py"], cwd=ROOT, capture_output=True, text=True)
+        p = subprocess.run([sys.executable, "tests/local/seed_bank.py"], cwd=ROOT, capture_output=True, text=True,
+                           encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         print("\n".join("   " + ln for ln in p.stdout.splitlines()[-4:]))
         with connect(cfg, cfg.result_connection) as ch:
             ch.execute(f"DROP DATABASE IF EXISTS `{cfg.result_db}` SYNC")

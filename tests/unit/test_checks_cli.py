@@ -10,9 +10,10 @@ from tests.unit.test_metadata import INDICATOR, SHARED, make
 def shared(tmp_path, monkeypatch):
     root = tmp_path / "shared"
     (root / "org").mkdir(parents=True)
-    (root / "org" / "units.sql").write_text("SELECT m.SOLID AS SOLID, m.BRANCHID AS BRANCHID FROM MAIN m")
-    (root / "org" / "unused.sql").write_text("SELECT e.ID AS ID FROM E e")
-    (root / "Bad-Name.sql").write_text("DELETE FROM X")
+    (root / "org" / "units.sql").write_text("SELECT m.SOLID AS SOLID, m.BRANCHID AS BRANCHID FROM MAIN m",
+                                            encoding="utf-8")
+    (root / "org" / "unused.sql").write_text("SELECT e.ID AS ID FROM E e", encoding="utf-8")
+    (root / "Bad-Name.sql").write_text("DELETE FROM X", encoding="utf-8")
     for mod in ("ri_runner.checks", "ri_runner.sqltext"):
         monkeypatch.setattr(f"{mod}.SHARED_DIR", root)
     return root

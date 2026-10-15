@@ -153,7 +153,8 @@ def test_period_from_master_text_and_calc(tmp_path):
     assert infer_period("Тайлант хугацаагаар") == infer_period("") == "report"
     (tmp_path / "_shared").mkdir()
     (tmp_path / "_shared" / "sh_001.sql").write_text(SHARED.replace("frequency: quarterly",
-                                                                    "frequency: quarterly\nperiod: since_audit"))
+                                                                    "frequency: quarterly\nperiod: since_audit"),
+                                                       encoding="utf-8")
     head = "/*---\nindicator_id: {}\nname_mn: x\ncalc: SH_001\nstatus: TODO\nversion: 0.1.0\n{}---*/\n"
     cat = make(tmp_path, {"ri_05_0001.sql": head.format("RI_05_0001", "period_text: Сүүлийн 1 жил\n"),
                           "ri_05_0002.sql": head.format("RI_05_0002", ""),
